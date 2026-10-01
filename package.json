@@ -1,0 +1,17 @@
+{
+  "name": "flight-tracker",
+  "version": "1.0.0",
+  "description": "Live, interactive map of every tracked flight in the world — search by flight number, callsign or registration.",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "demo": "DEMO=1 node server.js",
+    "dev": "node --watch server.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=18.17"
+  },
+  "license": "MIT"
+}
