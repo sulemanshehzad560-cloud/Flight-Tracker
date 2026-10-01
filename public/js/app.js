@@ -6,6 +6,17 @@ import { nativeFetch, isNativeApp } from './native-http.js';
 // Running inside the Android app (no server: the API runs in the page with native HTTP).
 const NATIVE = isNativeApp();
 
+// Android app: send JavaScript errors to the app's diagnostics log (capped per session).
+if (NATIVE && window.NativeApp) {
+  let reported = 0;
+  const report = (message) => {
+    if (reported++ < 50) window.NativeApp.log('E', String(message).slice(0, 2000));
+  };
+  window.addEventListener('error', (e) => report(`${e.message} (${e.filename}:${e.lineno}:${e.colno})${e.error?.stack ? `\n${e.error.stack}` : ''}`));
+  window.addEventListener('unhandledrejection', (e) => report(`Unhandled rejection: ${e.reason?.stack || e.reason}`));
+  document.documentElement.classList.add('native');
+}
+
 // ---------------------------------------------------------------------------
 // Configuration
 // ---------------------------------------------------------------------------
@@ -1382,13 +1393,38 @@ function renderLegend() {
 renderLegend();
 
 let toastTimer = null;
-function toast(message, isError = false) {
+function toast(message, isError = false, action = null) {
   const el = $('#toast');
   el.textContent = message;
+  if (action) {
+    const btn = document.createElement('button');
+    btn.className = 'toast-action';
+    btn.textContent = action.label;
+    btn.onclick = () => {
+      el.hidden = true;
+      action.run();
+    };
+    el.append(btn);
+  }
   el.className = `toast${isError ? ' error' : ''}`;
   el.hidden = false;
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { el.hidden = true; }, 4500);
+  toastTimer = setTimeout(() => { el.hidden = true; }, action ? 12000 : 4500);
+}
+
+// Android app: diagnostics report, ad privacy options, crash follow-up.
+if (NATIVE && window.NativeApp) {
+  $('#app-section').hidden = false;
+  $('#app-version').textContent = `Version ${window.NativeApp.version()}`;
+  $('#btn-report').addEventListener('click', () => window.NativeApp.shareDiagnostics());
+  $('#btn-privacy').addEventListener('click', () => window.NativeApp.showPrivacyOptions());
+  document.querySelector('[data-panel="settings"]').addEventListener('click', () => {
+    $('#btn-privacy').hidden = !window.NativeApp.isPrivacyOptionsRequired();
+  });
+  window.flightTracker.onPreviousCrash = () => toast('Flight Tracker closed unexpectedly last time.', true, {
+    label: 'Send report',
+    run: () => window.NativeApp.shareDiagnostics(),
+  });
 }
 
 // ---------------------------------------------------------------------------

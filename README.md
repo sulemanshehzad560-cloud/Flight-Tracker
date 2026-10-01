@@ -92,22 +92,48 @@ OPENSKY_CLIENT_ID=your-client-id OPENSKY_CLIENT_SECRET=your-secret npm start
 | `DEMO` | – | `1` = simulated traffic (no network) |
 | `DEMO_AIRCRAFT` | `4000` | Number of simulated aircraft |
 
-## Android app (APK)
+## Android app (Google Play)
 
-The `android/` folder wraps the same web app in a native Android shell (Android 6.0+), **with no server needed**.
-On the phone, the API in `lib/api.js` runs inside the app. HTTP requests go through native Android code
-(`NativeHttp` in `MainActivity.java`), which is not subject to the CORS restrictions that browsers apply.
+`android/` is a standard Gradle project that wraps the web app in a native Android shell (Android 6.0+),
+**with no server needed**. On the phone, the API in `lib/api.js` runs inside the app. HTTP requests go through
+native Android code (`NativeHttp` in `MainActivity.java`), which is not subject to the CORS restrictions
+that browsers apply.
 
-```bash
-# Ubuntu/Debian prerequisites: a JDK plus
-sudo apt install android-sdk-platform-23 android-sdk-build-tools dalvik-exchange
-npm run android      # → android/build/FlightTracker.apk
-```
+- **Ads:** an AdMob adaptive banner sits below the map. A consent form appears where the law requires it
+  (Google UMP), and "Ad privacy settings" is in Settings. Release builds use the real AdMob IDs
+  (in `android/app/build.gradle.kts`). Debug builds use Google's test ads, so testing never risks your account.
+- **Crash analysis:**
+  - Play Console (Android vitals) receives crashes and ANRs. R8 mapping files and native symbols are
+    embedded in the AAB and also published as a CI artifact, so stack traces are readable.
+  - The app keeps a local diagnostics log of Java crashes, JavaScript errors, WebView renderer
+    crashes and ad errors.
+  - Users can send that log from **Settings → Send diagnostics report**. After a crash, the app offers
+    to send it the next time it opens.
+  - If the WebView renderer dies, the app rebuilds the screen instead of crashing.
+- **Android 15+:** the app draws edge-to-edge and pads itself around the system bars and keyboard.
 
-The build doesn't use Gradle (aapt2 → javac → dx → zipalign → apksigner) and signs the APK with a
-locally generated debug key. To install it, copy the APK to your phone and allow "Install unknown apps".
-On the phone the app behaves like the website: the back button closes panels and deselects flights,
-external links open in your browser, and "my location" asks for location permission.
+### Building
+
+GitHub Actions (`.github/workflows/android.yml`) builds on every push. Each run's **Artifacts** section contains:
+
+| Artifact | What it's for |
+|---|---|
+| `…-release-aab` | `app-release.aab`, which you upload to Play Console |
+| `…-debug-files` | `mapping.txt` (and native symbols, if any). Upload these in Play Console → App bundle explorer → Downloads if they're ever needed separately. |
+| `…-debug-apk` | Installable APK with test ads, for trying the app on a phone |
+
+Release signing uses your **upload key**, stored as repository secrets
+(Settings → Secrets and variables → Actions):
+
+| Secret | Value |
+|---|---|
+| `ANDROID_KEYSTORE_BASE64` | the keystore file, base64-encoded (`base64 -w0 upload-key.jks`) |
+| `ANDROID_KEYSTORE_PASSWORD` | keystore password |
+| `ANDROID_KEY_ALIAS` | key alias |
+| `ANDROID_KEY_PASSWORD` | key password |
+
+Never commit the keystore: this repository is public. To build locally, install the Android SDK
+(Android Studio) and Node.js, then run `npm run android`.
 
 ## Deploying
 
@@ -136,7 +162,7 @@ public/js/format.js    Units, altitude colours, geo maths
 public/js/airlines.js  IATA ↔ ICAO airline table (shared by server and browser)
 public/js/native-http.js  fetch() over the Android native bridge
 lib/api.js             The JSON API itself (shared by server.js and the Android app)
-android/               Android shell (MainActivity.java), resources and build.sh
+android/               Android app (Gradle): WebView shell, AdMob, diagnostics
 ```
 
 ## Notes and limits

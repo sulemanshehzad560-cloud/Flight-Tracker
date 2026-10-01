@@ -9,7 +9,7 @@
     "demo": "DEMO=1 node server.js",
     "dev": "node --watch server.js",
     "test": "node --test",
-    "android": "bash android/build.sh"
+    "android": "cd android && ./gradlew bundleRelease assembleDebug"
   },
   "engines": {
     "node": ">=18.17"

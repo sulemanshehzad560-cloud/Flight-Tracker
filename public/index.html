@@ -90,8 +90,16 @@
     <div class="segmented" id="unit-select"></div>
     <h3>Data</h3>
     <div class="data-status" id="data-status">Connecting…</div>
-    <h3>Shortcuts</h3>
-    <ul class="shortcuts">
+    <div id="app-section" hidden>
+      <h3>App</h3>
+      <div class="app-actions">
+        <button class="link-btn" id="btn-report">Send diagnostics report</button>
+        <button class="link-btn" id="btn-privacy" hidden>Ad privacy settings</button>
+      </div>
+      <div class="data-status" id="app-version"></div>
+    </div>
+    <h3 class="desktop-only">Shortcuts</h3>
+    <ul class="shortcuts desktop-only">
       <li><kbd>/</kbd> Search</li>
       <li><kbd>Esc</kbd> Close / deselect</li>
       <li><kbd>F</kbd> Follow selected flight</li>

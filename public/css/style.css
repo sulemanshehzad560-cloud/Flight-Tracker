@@ -151,6 +151,10 @@ button { font: inherit; color: inherit; }
   color: var(--text); font: 500 13px var(--mono); outline: 0; text-transform: uppercase;
 }
 .text-input:focus { border-color: rgba(255, 194, 26, .55); }
+.app-actions { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; margin-bottom: 6px; }
+.app-actions .link-btn { margin-top: 4px; }
+.toast-action { margin-left: 10px; border: 0; background: none; color: var(--accent); font-weight: 700; cursor: pointer; padding: 0; }
+.native .desktop-only { display: none; }
 .link-btn { margin-top: 12px; border: 0; background: none; color: var(--accent); cursor: pointer; padding: 0; font-weight: 600; font-size: 13px; }
 
 .segmented { display: flex; flex-direction: column; gap: 4px; }
