@@ -92,6 +92,23 @@ OPENSKY_CLIENT_ID=your-client-id OPENSKY_CLIENT_SECRET=your-secret npm start
 | `DEMO` | – | `1` = simulated traffic (no network) |
 | `DEMO_AIRCRAFT` | `4000` | Number of simulated aircraft |
 
+## Android app (APK)
+
+The `android/` folder wraps the same web app in a native Android shell (Android 6.0+), **with no server needed**.
+On the phone, the API in `lib/api.js` runs inside the app. HTTP requests go through native Android code
+(`NativeHttp` in `MainActivity.java`), which is not subject to the CORS restrictions that browsers apply.
+
+```bash
+# Ubuntu/Debian prerequisites: a JDK plus
+sudo apt install android-sdk-platform-23 android-sdk-build-tools dalvik-exchange
+npm run android      # → android/build/FlightTracker.apk
+```
+
+The build doesn't use Gradle (aapt2 → javac → dx → zipalign → apksigner) and signs the APK with a
+locally generated debug key. To install it, copy the APK to your phone and allow "Install unknown apps".
+On the phone the app behaves like the website: the back button closes panels and deselects flights,
+external links open in your browser, and "my location" asks for location permission.
+
 ## Deploying
 
 The app is a single Node process with no dependencies. It runs on any host that can run Node,
@@ -117,6 +134,9 @@ public/js/app.js       Map, live updates, selection, search, filters, details pa
 public/js/icons.js     Aircraft silhouettes rendered as SDF icons (tinted by altitude on the GPU)
 public/js/format.js    Units, altitude colours, geo maths
 public/js/airlines.js  IATA ↔ ICAO airline table (shared by server and browser)
+public/js/native-http.js  fetch() over the Android native bridge
+lib/api.js             The JSON API itself (shared by server.js and the Android app)
+android/               Android shell (MainActivity.java), resources and build.sh
 ```
 
 ## Notes and limits

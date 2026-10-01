@@ -8,7 +8,8 @@
     "start": "node server.js",
     "demo": "DEMO=1 node server.js",
     "dev": "node --watch server.js",
-    "test": "node --test"
+    "test": "node --test",
+    "android": "bash android/build.sh"
   },
   "engines": {
     "node": ">=18.17"

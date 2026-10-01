@@ -1,6 +1,10 @@
 import { buildIcons, iconForCategory, iconDataUrl } from './icons.js';
 import * as F from './format.js';
 import { airlineForCallsign, flightNumberForCallsign, callsignCandidates } from './airlines.js';
+import { nativeFetch, isNativeApp } from './native-http.js';
+
+// Running inside the Android app (no server: the API runs in the page with native HTTP).
+const NATIVE = isNativeApp();
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -199,7 +203,18 @@ function setupLayers() {
 map.on('style.load', setupLayers);
 
 // Handy for debugging from the browser console.
-window.flightTracker = { map, state };
+window.flightTracker = {
+  map,
+  state,
+  /** Android back button: close the top-most thing; false when there was nothing to close. */
+  back() {
+    if (!resultsEl.hidden) hideResults();
+    else if (document.querySelector('.popover:not([hidden])')) closePopovers();
+    else if (state.selected) deselect();
+    else return false;
+    return true;
+  },
+};
 
 function applySelectionFilter() {
   if (!map.getLayer('aircraft-icons')) return;
@@ -212,7 +227,27 @@ function applySelectionFilter() {
 // Data: fetching & merging
 // ---------------------------------------------------------------------------
 
+let localApi = null;
+
+/** Android app: the same API as server.js, running in the page (lib/api.js) over native HTTP. */
+function getLocalApi() {
+  localApi ??= (async () => {
+    const [{ createApi }, providers] = await Promise.all([import('../../lib/api.js'), import('../../lib/providers.js')]);
+    providers.setFetch(nativeFetch);
+    return createApi({ opensky: new providers.OpenSkyGlobal({}), statusExtra: () => ({ app: 'android' }) });
+  })();
+  return localApi;
+}
+
 async function api(path, { signal } = {}) {
+  if (NATIVE) {
+    const handle = await getLocalApi();
+    const [status, data] = await handle(new URL(path, location.href));
+    if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+    if (status >= 400) throw new Error(data.error || `Error ${status}`);
+    // Copy: the UI annotates aircraft objects, which must not leak back into the API's caches.
+    return structuredClone(data);
+  }
   const res = await fetch(path, { signal });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || `Server error ${res.status}`);
@@ -761,7 +796,7 @@ function renderDetails() {
         </div>
         <div class="d-actions">
           <button class="icon-btn ${state.follow ? 'active' : ''}" id="btn-follow" title="Follow (F)" aria-label="Follow this aircraft">${ICON_SVG.follow}</button>
-          <button class="icon-btn" id="btn-share" title="Copy link" aria-label="Copy link to this flight">${ICON_SVG.share}</button>
+          ${NATIVE ? '' : `<button class="icon-btn" id="btn-share" title="Copy link" aria-label="Copy link to this flight">${ICON_SVG.share}</button>`}
           <button class="icon-btn" id="btn-close" title="Close (Esc)" aria-label="Close">${ICON_SVG.close}</button>
         </div>
       </div>
@@ -796,7 +831,7 @@ function renderDetails() {
   panel.hidden = false;
   $('#btn-close').onclick = deselect;
   $('#btn-follow').onclick = () => setFollow(!state.follow);
-  $('#btn-share').onclick = async () => {
+  if (!NATIVE) $('#btn-share').onclick = async () => {
     try {
       await navigator.clipboard.writeText(location.href);
       toast('Link copied — anyone with it will see this flight.');
@@ -1293,6 +1328,7 @@ function showWorld() {
   map.flyTo({ center: [20, 28], zoom: 1.9, pitch: 0, bearing: 0 });
 }
 $('#btn-world').addEventListener('click', showWorld);
+$('#btn-fullscreen').hidden = NATIVE;
 $('#btn-fullscreen').addEventListener('click', () => {
   if (document.fullscreenElement) document.exitFullscreen();
   else document.documentElement.requestFullscreen?.();
