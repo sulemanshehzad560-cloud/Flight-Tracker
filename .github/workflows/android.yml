@@ -12,7 +12,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write # publishes each build as a GitHub Release with plain (unzipped) downloads
 
 jobs:
   build:
@@ -124,3 +124,24 @@ jobs:
           path: android/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           compression-level: 0
+
+      - name: Prepare plain downloads
+        run: |
+          mkdir -p dist
+          cp android/app/build/outputs/bundle/release/app-release.aab "dist/AirSea-Radar-1.0.${GITHUB_RUN_NUMBER}.aab"
+          cp android/app/build/outputs/apk/debug/app-debug.apk "dist/AirSea-Radar-1.0.${GITHUB_RUN_NUMBER}-test.apk"
+          cp android/app/build/outputs/mapping/release/mapping.txt "dist/mapping-1.0.${GITHUB_RUN_NUMBER}.txt"
+          ls -la dist
+
+      - name: Publish as a GitHub Release (direct, unzipped downloads)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: AirSea Radar 1.0.${{ github.run_number }}
+          target_commitish: ${{ github.sha }}
+          prerelease: true
+          body: |
+            - **AirSea-Radar-1.0.${{ github.run_number }}.aab**: upload to Google Play Console (signed with the upload key)
+            - **AirSea-Radar-1.0.${{ github.run_number }}-test.apk**: install on a phone for testing (Google test ads)
+            - **mapping-1.0.${{ github.run_number }}.txt**: R8 mapping for readable crash reports (already inside the AAB)
+          files: dist/*
