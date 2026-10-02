@@ -79,13 +79,16 @@ jobs:
       - name: Build release bundle and debug APK
         working-directory: android
         env:
-          VERSION_CODE: ${{ github.run_number }}
           VERSION_NAME: 1.0.${{ github.run_number }}
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
           AISSTREAM_API_KEY: ${{ secrets.AISSTREAM_API_KEY }}
-        run: ./gradlew --no-daemon --stacktrace bundleRelease assembleDebug
+        run: |
+          # Play needs a higher version code for every upload: 1000 + build number (1008, 1009, …).
+          export VERSION_CODE=$((1000 + GITHUB_RUN_NUMBER))
+          echo "Version code $VERSION_CODE, version name $VERSION_NAME" | tee -a "$GITHUB_STEP_SUMMARY"
+          ./gradlew --no-daemon --stacktrace bundleRelease assembleDebug
 
       - name: Report sizes
         run: |
