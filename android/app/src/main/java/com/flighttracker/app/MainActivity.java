@@ -47,7 +47,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /**
- * Hosts the Flight Tracker web app in a WebView, with an AdMob banner underneath.
+ * Hosts the AirSea Radar web app in a WebView, with an AdMob banner underneath.
  *
  * - The app's files (assets/www) are served from https://appassets.androidplatform.net/, so ES modules
  *   and browser storage work exactly as on the web.
@@ -63,6 +63,8 @@ public class MainActivity extends Activity {
     private WebView web;
     private FrameLayout webHolder;
     private AdsController ads;
+    private TilePack tiles;
+    private AisStreamClient ais;
     private final ExecutorService pool = Executors.newFixedThreadPool(6);
     private GeolocationPermissions.Callback pendingGeoCallback;
     private String pendingGeoOrigin;
@@ -125,7 +127,7 @@ public class MainActivity extends Activity {
         } catch (RuntimeException e) {
             Diagnostics.log("E", "WebView", "Unavailable: " + Diagnostics.stackTrace(e));
             TextView message = new TextView(this);
-            message.setText("Flight Tracker needs Android System WebView. Please install or update it from the Play Store, then reopen the app.");
+            message.setText("AirSea Radar needs Android System WebView. Please install or update it from the Play Store, then reopen the app.");
             message.setTextColor(0xFFE8ECF5);
             message.setPadding(48, 48, 48, 48);
             webHolder.addView(message);
@@ -141,10 +143,13 @@ public class MainActivity extends Activity {
         s.setGeolocationEnabled(true);
         s.setAllowFileAccess(false);
         s.setAllowContentAccess(false);
-        s.setUserAgentString(s.getUserAgentString() + " FlightTrackerApp/" + BuildConfig.VERSION_NAME);
+        s.setUserAgentString(s.getUserAgentString() + " AirSeaRadar/" + BuildConfig.VERSION_NAME);
 
+        tiles = new TilePack(getAssets());
+        if (AisStreamClient.available()) ais = new AisStreamClient(BuildConfig.AISSTREAM_API_KEY, web);
         web.addJavascriptInterface(new NativeHttp(), "NativeHttp");
         web.addJavascriptInterface(new NativeApp(), "NativeApp");
+        web.addJavascriptInterface(new NativeAis(), "NativeAis");
         web.setWebViewClient(new WebViewClient() {
             @Override
             public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
@@ -257,6 +262,7 @@ public class MainActivity extends Activity {
     protected void onPause() {
         if (web != null) web.onPause();
         if (ads != null) ads.pause();
+        if (ais != null) ais.pause();
         super.onPause();
     }
 
@@ -265,11 +271,13 @@ public class MainActivity extends Activity {
         super.onResume();
         if (web != null) web.onResume();
         if (ads != null) ads.resume();
+        if (ais != null) ais.resume();
     }
 
     @Override
     protected void onDestroy() {
         pool.shutdownNow();
+        if (ais != null) ais.close();
         if (ads != null) ads.destroy();
         if (web != null) web.destroy();
         super.onDestroy();
@@ -285,10 +293,22 @@ public class MainActivity extends Activity {
         MIME.put("json", "application/json");
         MIME.put("svg", "image/svg+xml");
         MIME.put("png", "image/png");
+        MIME.put("pbf", "application/x-protobuf");
     }
+
+    private static final java.util.regex.Pattern TILE = java.util.regex.Pattern.compile("^/public/map/tiles/(\\d+)/(\\d+)/(\\d+)\\.pbf$");
 
     private WebResourceResponse serveAsset(String path) {
         if (path == null || path.equals("/")) path = "/public/index.html";
+        java.util.regex.Matcher tile = TILE.matcher(path);
+        if (tile.matches()) {
+            try {
+                byte[] data = tiles.get(Integer.parseInt(tile.group(1)), Integer.parseInt(tile.group(2)), Integer.parseInt(tile.group(3)));
+                return new WebResourceResponse("application/x-protobuf", null, new ByteArrayInputStream(data));
+            } catch (Exception e) {
+                Diagnostics.log("W", "Tiles", "Offline map tile " + path + ": " + e.getMessage());
+            }
+        }
         String ext = path.substring(path.lastIndexOf('.') + 1).toLowerCase(Locale.ROOT);
         String mime = MIME.containsKey(ext) ? MIME.get(ext) : "application/octet-stream";
         try {
@@ -354,6 +374,24 @@ public class MainActivity extends Activity {
                     if (web != null) web.evaluateJavascript(js, null);
                 });
             });
+        }
+    }
+
+    /** aisstream.io ship feed for the page (see AisStreamClient). */
+    private class NativeAis {
+        @JavascriptInterface
+        public boolean isAvailable() {
+            return ais != null;
+        }
+
+        @JavascriptInterface
+        public void subscribe(String boxesJson) {
+            if (ais != null) ais.subscribe(boxesJson);
+        }
+
+        @JavascriptInterface
+        public void close() {
+            if (ais != null) ais.close();
         }
     }
 

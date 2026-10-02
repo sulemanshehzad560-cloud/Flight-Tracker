@@ -39,3 +39,28 @@ export function nativeFetch(url, { method = 'GET', headers = {}, body } = {}) {
 }
 
 export const isNativeApp = () => typeof window.NativeHttp !== 'undefined';
+
+/**
+ * Android app only: aisstream.io ship feed over the app's native WebSocket (see AisStreamClient.java).
+ * Same interface as webSocketAisStream() in lib/ships.js. The app delivers messages in batches.
+ */
+export function nativeAisStream({ onMessage, onStatus }) {
+  window.__aisBatch = (json) => {
+    let batch;
+    try {
+      batch = JSON.parse(json);
+    } catch {
+      return;
+    }
+    for (const msg of batch) onMessage(msg);
+  };
+  window.__aisStatus = (status) => onStatus(status);
+  return {
+    subscribe(boxes) {
+      window.NativeAis.subscribe(JSON.stringify(boxes));
+    },
+    close() {
+      window.NativeAis.close();
+    },
+  };
+}

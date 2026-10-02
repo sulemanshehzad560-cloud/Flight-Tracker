@@ -1,13 +1,25 @@
-# ✈ Flight Tracker
+# ✈🚢 AirSea Radar
 
-A live, interactive map of air traffic around the world, in the style of Flightradar24.
-Every tracked aircraft appears as a small plane icon, rotated to its heading and coloured by altitude.
-Click any plane, or search for it by **flight number**, to see where it is going and how high and fast it is flying.
+**Live flight tracker and ship tracker on one interactive radar map.**
+Every tracked aircraft appears as a small plane icon, rotated to its heading and coloured by altitude,
+and every ship as a hull coloured by vessel type. Search any **flight number**, ship name, MMSI or airport,
+and the map flies there and follows it. The detailed world map is **built in**, so it opens instantly
+and works offline.
 
-![Flight Tracker](docs/screenshot.png)
-<sub>Screenshot taken in demo mode (simulated traffic; the build sandbox could not load map tiles).</sub>
+![AirSea Radar](docs/screenshot.png)
+<sub>Screenshot in demo mode (simulated traffic) on the built-in offline map.</sub>
 
 ## Features
+
+- **Live ships (AIS).** Cargo ships, tankers, ferries, fishing boats, tugs and yachts, coloured by type.
+  The ship panel shows destination, ETA, speed, course, heading, status, size, draught, IMO and call sign.
+  Search by name, MMSI, IMO or call sign.
+- **Built-in offline world map.** Natural Earth coastlines and borders, 25,000 cities and 5,000 airports
+  as vector tiles (zoom 0–9) packed into the app. No tile server is needed.
+- **Airports.** Tap an airport (or search `LHR`) to see aircraft arriving and departing nearby, local time and day or night.
+- **Extras.** Day & night shading, live weather radar (RainViewer) and a live statistics panel:
+  flights by altitude, busiest airlines (tap to filter), and the highest and fastest aircraft and fastest ship in view.
+- **Loading screen** while the map and the live feeds connect, with an offline notice.
 
 - **The whole world, live.** Thousands of aircraft at once, drawn on the GPU (MapLibre GL). Positions are
   dead-reckoned between updates, so planes move smoothly instead of jumping.
@@ -35,9 +47,11 @@ Click any plane, or search for it by **flight number**, to see where it is going
 
 ## Quick start
 
-Requires **Node.js 18.17+**. There are no dependencies to install.
+Requires **Node.js 18.17+** (22+ for worldwide ships). The server has no runtime dependencies. The npm
+packages are only needed once, to build the offline map.
 
 ```bash
+npm install && npm run basemap   # builds public/map (offline world map, ~33 MB, about 10 s)
 npm start            # live data   → http://localhost:8080
 npm run demo         # simulated traffic, no internet needed (for development)
 npm test             # unit tests
@@ -55,7 +69,11 @@ none send CORS headers, so `server.js` fetches the data, merges it into one form
 | [airplanes.live](https://airplanes.live/) · [adsb.fi](https://adsb.fi/) | Automatic fallbacks for adsb.lol | Same readsb data format. A feed that fails is skipped for a cool-down period. |
 | [adsbdb.com](https://www.adsbdb.com/) | Origin and destination by callsign, aircraft details | Free and open |
 | [planespotters.net](https://www.planespotters.net/) | Aircraft photos | Photos credited to their photographers |
-| [CARTO](https://carto.com/basemaps) · [Esri](https://www.esri.com/) | Base maps (dark, light, streets, satellite) | |
+| [aisstream.io](https://aisstream.io/) | **Ships worldwide** (AIS) | Free API key required (`AISSTREAM_API_KEY`). It refuses browser connections, so the server (or the Android app natively) holds the WebSocket. |
+| [Digitraffic](https://www.digitraffic.fi/en/marine-traffic/) | Ships in the Baltic Sea, **no key** | Finnish Transport Infrastructure Agency open data |
+| [Natural Earth](https://www.naturalearthdata.com/) · [GeoNames](https://www.geonames.org/) (CC BY 4.0) · [OurAirports](https://ourairports.com/) | Built-in offline map | Built by `scripts/build-basemap.mjs` |
+| [RainViewer](https://www.rainviewer.com/api.html) | Weather radar overlay | Free, no key |
+| [CARTO](https://carto.com/basemaps) · [Esri](https://www.esri.com/) | Online base maps (dark, light, streets, satellite) | |
 
 How a request is answered:
 
@@ -89,6 +107,7 @@ OPENSKY_CLIENT_ID=your-client-id OPENSKY_CLIENT_SECRET=your-secret npm start
 | `HOST` | `0.0.0.0` | Interface to listen on |
 | `OPENSKY_CLIENT_ID` / `OPENSKY_CLIENT_SECRET` | – | OpenSky API client (OAuth2 client-credentials) |
 | `OPENSKY_REFRESH_SEC` | `60` with an account, `300` without | How often to refresh the world snapshot |
+| `AISSTREAM_API_KEY` | – | aisstream.io key for worldwide ships (Node 22+) |
 | `DEMO` | – | `1` = simulated traffic (no network) |
 | `DEMO_AIRCRAFT` | `4000` | Number of simulated aircraft |
 
@@ -111,6 +130,12 @@ that browsers apply.
     to send it the next time it opens.
   - If the WebView renderer dies, the app rebuilds the screen instead of crashing.
 - **Android 15+:** the app draws edge-to-edge and pads itself around the system bars and keyboard.
+- **Offline map in the package:** the built-in world map (`public/map`, ~33 MB) ships inside the AAB/APK,
+  **stored uncompressed**. Tiles are read straight from the package (`TilePack.java`). The app opens on it
+  by default; the online maps are one tap away in Layers.
+- **Ships on the phone:** with the `AISSTREAM_API_KEY` secret set, the app opens its own aisstream.io WebSocket
+  (OkHttp, `AisStreamClient.java`) for the area on screen. Without it, the app shows Baltic ships from Digitraffic.
+  The key is built into the app, so use a key dedicated to it.
 
 ### Building
 
@@ -131,6 +156,7 @@ Release signing uses your **upload key**, stored as repository secrets
 | `ANDROID_KEYSTORE_PASSWORD` | keystore password |
 | `ANDROID_KEY_ALIAS` | key alias |
 | `ANDROID_KEY_PASSWORD` | key password |
+| `AISSTREAM_API_KEY` | *(optional)* aisstream.io key for worldwide ships ([free sign-up](https://aisstream.io/authenticate)) |
 
 Never commit the keystore: this repository is public. To build locally, install the Android SDK
 (Android Studio) and Node.js, then run `npm run android`.

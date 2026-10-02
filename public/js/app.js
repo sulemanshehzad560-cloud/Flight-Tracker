@@ -1,7 +1,9 @@
 import { buildIcons, iconForCategory, iconDataUrl } from './icons.js';
 import * as F from './format.js';
 import { airlineForCallsign, flightNumberForCallsign, callsignCandidates } from './airlines.js';
-import { nativeFetch, isNativeApp } from './native-http.js';
+import { nativeFetch, isNativeApp, nativeAisStream } from './native-http.js';
+import { SHIP_CATEGORIES, shipCategory, shipTypeName, NAV_STATUS, isStopped, shipColor, shipSize } from './ships.js';
+import * as Extras from './extras.js';
 
 // Running inside the Android app (no server: the API runs in the page with native HTTP).
 const NATIVE = isNativeApp();
@@ -28,13 +30,76 @@ const MAX_EXTRAPOLATE_MS = 10 * 60 * 1000; // dead-reckon positions at most this
 const SIGNAL_LOST_MS = 2 * 60 * 1000;
 const HISTORY_POINTS = 400;
 const WORLD_ZOOM = 2.6; // below this zoom the whole world is requested
+const SHIP_MIN_ZOOM = 3.5; // ships are only fetched when zoomed in at least this far
+const POLL_SHIPS_MS = 15000;
+const SHIP_EXTRAPOLATE_MS = 30 * 60 * 1000;
+const SHIP_TRAIL_POINTS = 300;
 
 const STYLES = {
+  builtin: { name: 'Built-in', swatch: 'linear-gradient(135deg,#0a1628,#1b2740 60%,#24324f)', offline: true },
   dark: { name: 'Dark', url: 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json', swatch: 'linear-gradient(135deg,#0d1220,#2a3247)' },
   light: { name: 'Light', url: 'https://basemaps.cartocdn.com/gl/positron-gl-style/style.json', swatch: 'linear-gradient(135deg,#f3f4f6,#cfd5df)', ink: '#1b2333' },
   streets: { name: 'Streets', url: 'https://basemaps.cartocdn.com/gl/voyager-gl-style/style.json', swatch: 'linear-gradient(135deg,#f6efe3,#a9cbe8)', ink: '#1b2333' },
   satellite: { name: 'Satellite', swatch: 'linear-gradient(135deg,#1f3b2a,#4a5d3a 50%,#1c3550)' },
 };
+
+/** Absolute URL of a file next to index.html (MapLibre's workers can't resolve relative URLs). */
+const assetUrl = (rel) => new URL(rel, location.href).href;
+
+/** The offline base map bundled with the app (public/map, built by scripts/build-basemap.mjs). */
+function builtinStyle() {
+  const ink = '#7f8da8';
+  const halo = '#0a1628';
+  const cityLayer = (id, minzoom, size) => ({
+    id, type: 'symbol', source: 'base', 'source-layer': id, minzoom,
+    layout: {
+      'text-field': ['get', 'name'], 'text-font': ['noto'], 'text-size': size, 'text-anchor': 'top', 'text-offset': [0, 0.4],
+      'icon-image': 'city-dot', 'icon-size': 0.5, 'text-optional': true, 'symbol-sort-key': ['-', 0, ['get', 'pop']],
+    },
+    paint: { 'text-color': '#aab6cc', 'text-halo-color': halo, 'text-halo-width': 1.2 },
+  });
+  return {
+    version: 8,
+    glyphs: `${assetUrl('map/glyphs/')}{fontstack}/{range}.pbf`,
+    sources: {
+      base: {
+        type: 'vector', tiles: [`${assetUrl('map/tiles/')}{z}/{x}/{y}.pbf`], minzoom: 0, maxzoom: 9,
+        attribution: 'Natural Earth · GeoNames · OurAirports',
+      },
+    },
+    layers: [
+      { id: 'ocean', type: 'background', paint: { 'background-color': '#0a1628' } },
+      { id: 'land', type: 'fill', source: 'base', 'source-layer': 'land', paint: { 'fill-color': '#18233a' } },
+      { id: 'coastline', type: 'line', source: 'base', 'source-layer': 'coastline', paint: { 'line-color': '#2e4266', 'line-width': ['interpolate', ['linear'], ['zoom'], 1, 0.5, 8, 1.4] } },
+      { id: 'borders', type: 'line', source: 'base', 'source-layer': 'borders', paint: { 'line-color': '#3b4f78', 'line-width': ['interpolate', ['linear'], ['zoom'], 1, 0.4, 8, 1.2], 'line-dasharray': [3, 2] } },
+      // (Zoom-dependent rules use separate layers with minzoom: filters can't depend on zoom.)
+      ...[['large', 1, 3, 5], ['small', 0, 6.5, 7.5]].flatMap(([name, large, dotZoom, labelZoom]) => [
+        {
+          id: `airport-dots-${name}`, type: 'circle', source: 'base', 'source-layer': 'airports', minzoom: dotZoom,
+          filter: ['==', ['get', 'large'], large],
+          paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 3, 1.6, 9, 4], 'circle-color': '#8fa3c8', 'circle-stroke-color': halo, 'circle-stroke-width': 1 },
+        },
+        {
+          id: `airport-labels-${name}`, type: 'symbol', source: 'base', 'source-layer': 'airports', minzoom: labelZoom,
+          filter: ['==', ['get', 'large'], large],
+          layout: { 'text-field': ['get', 'code'], 'text-font': ['noto'], 'text-size': 10, 'text-anchor': 'left', 'text-offset': [0.7, 0], 'text-optional': true },
+          paint: { 'text-color': '#8fa3c8', 'text-halo-color': halo, 'text-halo-width': 1 },
+        },
+      ]),
+      cityLayer('cities4', 7, 10), cityLayer('cities3', 5, 10.5), cityLayer('cities2', 3.5, 11.5), cityLayer('cities1', 2, 12.5),
+      ...[['big', ['>', ['get', 'area'], 30], 1.5], ['small', ['<=', ['get', 'area'], 30], 3.5]].map(([name, filter, minzoom]) => ({
+        id: `country-labels-${name}`, type: 'symbol', source: 'base', 'source-layer': 'countries', minzoom, maxzoom: 7, filter,
+        layout: { 'text-field': ['upcase', ['get', 'name']], 'text-font': ['noto'], 'text-size': ['interpolate', ['linear'], ['zoom'], 2, 9, 6, 13], 'text-letter-spacing': 0.12, 'text-max-width': 7 },
+        paint: { 'text-color': ink, 'text-halo-color': halo, 'text-halo-width': 1.2 },
+      })),
+    ],
+  };
+}
+
+function styleFor(id) {
+  if (id === 'builtin') return builtinStyle();
+  return STYLES[id]?.url || satelliteStyle();
+}
 
 function satelliteStyle() {
   const esri = 'https://server.arcgisonline.com/ArcGIS/rest/services';
@@ -87,7 +152,11 @@ const state = {
   details: null,
   follow: false,
   filters: { ...DEFAULT_FILTERS, ...store.get('filters', {}) },
-  settings: { style: 'dark', globe: false, labels: true, trails: false, units: 'aviation', ...store.get('settings', {}) },
+  // The Android app opens on the bundled offline map; the website on the detailed online map.
+  settings: {
+    style: NATIVE ? 'builtin' : 'dark', globe: false, labels: true, trails: false, units: 'aviation', ships: true,
+    airports: true, daynight: false, weather: false, ...store.get('settings', {}),
+  },
   lastOk: 0,
   lastError: null,
   mode: '',
@@ -95,6 +164,18 @@ const state = {
   notices: [],
   clockOffset: 0,
   visibleCount: 0,
+  // Ships (AIS)
+  ships: new Map(), // MMSI -> normalized ship
+  shipTrails: new Map(), // MMSI -> [[lon, lat, ts], ...]
+  selectedShip: null,
+  shipSources: [],
+  shipNotices: [],
+  shipVisibleCount: 0,
+  shipsPolled: false,
+  // Airports (bundled list, for search and the airport panel)
+  airports: [],
+  selectedAirport: null,
+  builtinAvailable: true,
 };
 F.setUnits(state.settings.units);
 
@@ -112,7 +193,7 @@ if (!window.maplibregl) {
 const savedView = store.get('view', null);
 const map = new maplibregl.Map({
   container: 'map',
-  style: STYLES[state.settings.style]?.url || satelliteStyle(),
+  style: styleFor(state.settings.style),
   center: savedView?.center || [20, 28],
   zoom: savedView?.zoom ?? 2.2,
   minZoom: 1,
@@ -139,11 +220,14 @@ function setupLayers() {
   labelFont = pickFont();
   map.setProjection({ type: state.settings.globe ? 'globe' : 'mercator' });
 
+  styleLoaded = true;
   for (const [name, image] of Object.entries(buildIcons())) {
     if (!map.hasImage(`ac-${name}`)) map.addImage(`ac-${name}`, image, { sdf: true, pixelRatio: 2 });
   }
+  if (!map.hasImage('city-dot')) map.addImage('city-dot', Extras.dotImage('#c8d3e6', '#0a1628'), { pixelRatio: 2 });
 
-  const sources = ['aircraft', 'trail', 'trails-all', 'route', 'airports'];
+  Extras.addOverlays(map, state.settings);
+  const sources = ['aircraft', 'ships', 'trail', 'trails-all', 'route', 'airports'];
   for (const id of sources) if (!map.getSource(id)) map.addSource(id, { type: 'geojson', data: EMPTY });
 
   // Zoom must be the top-level input of the expression, so scale each stop by the per-aircraft size.
@@ -178,6 +262,28 @@ function setupLayers() {
     id: 'airports-label', type: 'symbol', source: 'airports',
     layout: { 'text-field': ['get', 'label'], 'text-font': labelFont, 'text-size': 12, 'text-offset': [0, 1.1], 'text-anchor': 'top', 'text-allow-overlap': true },
     paint: { 'text-color': '#ffffff', 'text-halo-color': 'rgba(0,0,0,0.85)', 'text-halo-width': 1.5 },
+  });
+  map.addLayer({
+    id: 'ship-icons', type: 'symbol', source: 'ships',
+    layout: {
+      'icon-image': ['concat', 'ac-', ['get', 'icon']],
+      'icon-size': iconSize(0.85),
+      'icon-rotate': ['get', 'k'],
+      'icon-rotation-alignment': 'map',
+      'icon-pitch-alignment': 'map',
+      'icon-allow-overlap': true,
+      'icon-ignore-placement': true,
+      visibility: state.settings.ships ? 'visible' : 'none',
+    },
+    paint: { 'icon-color': ['get', 'col'], 'icon-halo-color': 'rgba(5,8,18,0.8)', 'icon-halo-width': 1 },
+  });
+  map.addLayer({
+    id: 'ship-labels', type: 'symbol', source: 'ships', minzoom: 9,
+    layout: {
+      'text-field': ['get', 'n'], 'text-font': labelFont, 'text-size': 10, 'text-offset': [0, 1.3], 'text-anchor': 'top',
+      'text-optional': true, visibility: state.settings.ships && state.settings.labels ? 'visible' : 'none',
+    },
+    paint: { 'text-color': '#cfe6ff', 'text-halo-color': 'rgba(5,8,18,0.85)', 'text-halo-width': 1.2 },
   });
   map.addLayer({
     id: 'aircraft-icons', type: 'symbol', source: 'aircraft',
@@ -221,7 +327,7 @@ window.flightTracker = {
   back() {
     if (!resultsEl.hidden) hideResults();
     else if (document.querySelector('.popover:not([hidden])')) closePopovers();
-    else if (state.selected) deselect();
+    else if (state.selected || state.selectedShip || state.selectedAirport) deselect();
     else return false;
     return true;
   },
@@ -232,7 +338,41 @@ function applySelectionFilter() {
   const filter = state.selected ? ['!=', ['get', 'h'], state.selected] : null;
   map.setFilter('aircraft-icons', filter);
   map.setFilter('aircraft-labels', filter);
+  const shipFilter = state.selectedShip ? ['!=', ['get', 'id'], state.selectedShip] : null;
+  map.setFilter('ship-icons', shipFilter);
+  map.setFilter('ship-labels', shipFilter);
 }
+
+// ---------------------------------------------------------------------------
+// Map styles (with automatic fallback to the built-in map when offline)
+// ---------------------------------------------------------------------------
+
+let styleLoaded = false;
+let styleTimer = null;
+
+function watchStyleLoad(id) {
+  clearTimeout(styleTimer);
+  if (id === 'builtin' || !state.builtinAvailable) return;
+  // An online map that hasn't loaded after a while (no connection): show the bundled map instead.
+  styleTimer = setTimeout(() => {
+    if (!styleLoaded) {
+      toast('The online map could not be loaded – showing the built-in offline map.');
+      setMapStyle('builtin', { remember: false });
+    }
+  }, 9000);
+}
+
+function setMapStyle(id, { remember = true } = {}) {
+  if (remember) {
+    state.settings.style = id;
+    saveSettings();
+  }
+  styleLoaded = false;
+  document.querySelectorAll('.style-btn').forEach((b) => b.classList.toggle('active', b.dataset.style === id));
+  map.setStyle(styleFor(id), { diff: false });
+  watchStyleLoad(id);
+}
+watchStyleLoad(state.settings.style);
 
 // ---------------------------------------------------------------------------
 // Data: fetching & merging
@@ -243,9 +383,14 @@ let localApi = null;
 /** Android app: the same API as server.js, running in the page (lib/api.js) over native HTTP. */
 function getLocalApi() {
   localApi ??= (async () => {
-    const [{ createApi }, providers] = await Promise.all([import('../../lib/api.js'), import('../../lib/providers.js')]);
+    const [{ createApi }, providers, { ShipTracker }] = await Promise.all([
+      import('../../lib/api.js'), import('../../lib/providers.js'), import('../../lib/ships.js'),
+    ]);
     providers.setFetch(nativeFetch);
-    return createApi({ opensky: new providers.OpenSkyGlobal({}), statusExtra: () => ({ app: 'android' }) });
+    // Worldwide ships come from aisstream.io through the app's native WebSocket (when a key was built in);
+    // the phone subscribes only to the area on screen.
+    const ships = new ShipTracker({ openStream: window.NativeAis?.isAvailable() ? nativeAisStream : null, globalStream: false });
+    return createApi({ opensky: new providers.OpenSkyGlobal({}), ships, statusExtra: () => ({ app: 'android' }) });
   })();
   return localApi;
 }
@@ -379,6 +524,7 @@ async function poll() {
       const delay = document.hidden ? POLL_HIDDEN_MS : state.mode === 'regional' ? POLL_REGIONAL_MS : POLL_GLOBAL_MS;
       pollTimer = setTimeout(poll, state.lastError ? Math.min(delay, 8000) : delay);
       updateStatus();
+      Splash.step('flights', state.lastError ? 'warn' : 'ok', state.lastError ? 'No connection yet – retrying' : `${F.fmtNumber(state.aircraft.size)} aircraft`);
     }
   }
 }
@@ -407,12 +553,18 @@ async function refreshSelectedIfMissing(signal) {
 let moveTimer = null;
 map.on('moveend', () => {
   clearTimeout(moveTimer);
-  moveTimer = setTimeout(poll, 350);
+  moveTimer = setTimeout(() => {
+    poll();
+    pollShips();
+  }, 350);
   const c = map.getCenter();
   store.set('view', { center: [+c.lng.toFixed(3), +c.lat.toFixed(3)], zoom: +map.getZoom().toFixed(2) });
 });
 document.addEventListener('visibilitychange', () => {
-  if (!document.hidden) poll();
+  if (!document.hidden) {
+    poll();
+    pollShips();
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -468,7 +620,7 @@ let lastFullRender = 0;
 function render(force = false) {
   const now = Date.now();
   // Fewer aircraft -> smoother animation; the whole world updates about once a second.
-  const interval = Math.min(1200, Math.max(250, state.aircraft.size / 8));
+  const interval = Math.min(1200, Math.max(250, (state.aircraft.size + state.ships.size) / 8));
   if (!force && now - lastFullRender < interval) return;
   lastFullRender = now;
   const source = map.getSource('aircraft');
@@ -481,6 +633,13 @@ function render(force = false) {
   state.visibleCount = features.length;
   source.setData({ type: 'FeatureCollection', features });
 
+  const shipSource = map.getSource('ships');
+  if (shipSource) {
+    const shipFeatures = [];
+    if (state.settings.ships) for (const ship of state.ships.values()) shipFeatures.push(shipFeature(ship, now));
+    state.shipVisibleCount = shipFeatures.length;
+    shipSource.setData({ type: 'FeatureCollection', features: shipFeatures });
+  }
 }
 
 // The selected aircraft is an HTML marker, animated every frame for perfectly smooth movement.
@@ -490,25 +649,39 @@ selectedEl.innerHTML = '<div class="sel-ring"></div><img class="sel-plane" alt="
 const selectedMarker = new maplibregl.Marker({ element: selectedEl }); // plane rotation handled below
 let selectedMarkerHex = null;
 
-function renderSelectedMarker() {
+/** What the highlighted marker shows: the selected aircraft or ship (null when nothing is selected). */
+function selectedTarget() {
   const ac = state.selected && state.aircraft.get(state.selected);
-  if (!ac) {
+  if (ac) {
+    const [la, lo] = currentPosition(ac);
+    return { key: `ac:${ac.h}`, icon: ac._icon, size: ac._size, label: ac.c || ac.r || ac.h.toUpperCase(), la, lo, rot: ac.k ?? 0 };
+  }
+  const ship = state.selectedShip && state.ships.get(state.selectedShip);
+  if (ship) {
+    const [la, lo] = shipPosition(ship);
+    const stopped = isStopped(ship);
+    return { key: `ship:${ship.id}:${stopped}`, icon: stopped ? 'ship-stopped' : 'ship', size: shipSize(ship) * 0.9, label: ship.n || ship.id, la, lo, rot: ship.h ?? ship.c ?? 0 };
+  }
+  return null;
+}
+
+function renderSelectedMarker() {
+  const t = selectedTarget();
+  if (!t) {
     if (selectedMarkerHex) selectedMarker.remove();
     selectedMarkerHex = null;
     return;
   }
-  const [la, lo] = currentPosition(ac);
-  if (selectedMarkerHex !== ac.h || selectedEl.dataset.icon !== ac._icon) {
-    selectedEl.dataset.icon = ac._icon;
-    selectedEl.querySelector('.sel-plane').src = iconDataUrl(ac._icon, '#ffc21a');
-    selectedEl.style.setProperty('--sz', ac._size);
-    selectedMarker.setLngLat([lo, la]).addTo(map);
-    selectedMarkerHex = ac.h;
+  if (selectedMarkerHex !== t.key) {
+    selectedEl.querySelector('.sel-plane').src = iconDataUrl(t.icon, '#ffc21a');
+    selectedEl.style.setProperty('--sz', t.size);
+    selectedMarker.setLngLat([t.lo, t.la]).addTo(map);
+    selectedMarkerHex = t.key;
   }
-  selectedEl.querySelector('.sel-label').textContent = ac.c || ac.r || ac.h.toUpperCase();
-  selectedMarker.setLngLat([lo, la]);
-  selectedEl.querySelector('.sel-plane').style.transform = `rotate(${(ac.k ?? 0) - map.getBearing()}deg)`;
-  if (state.follow && !map.isMoving() && !userInteracting) map.jumpTo({ center: [lo, la] });
+  selectedEl.querySelector('.sel-label').textContent = t.label;
+  selectedMarker.setLngLat([t.lo, t.la]);
+  selectedEl.querySelector('.sel-plane').style.transform = `rotate(${t.rot - map.getBearing()}deg)`;
+  if (state.follow && !map.isMoving() && !userInteracting) map.jumpTo({ center: [t.lo, t.la] });
 }
 
 let userInteracting = false;
@@ -568,6 +741,13 @@ function renderSelectionOverlays() {
   const route = map.getSource('route');
   const airports = map.getSource('airports');
   if (!trail || !route || !airports) return;
+  const ship = state.selectedShip && state.ships.get(state.selectedShip);
+  if (ship) {
+    trail.setData({ type: 'FeatureCollection', features: shipTrailFeatures(ship) });
+    route.setData(EMPTY);
+    airports.setData(EMPTY);
+    return;
+  }
   const ac = state.selected && state.aircraft.get(state.selected);
   if (!ac) {
     trail.setData(EMPTY);
@@ -638,6 +818,8 @@ let selectToken = 0;
 async function selectAircraft(hex, { fly = false, follow = false } = {}) {
   if (!hex) return deselect();
   const token = ++selectToken;
+  state.selectedShip = null;
+  state.selectedAirport = null;
   state.selected = hex;
   state.selectedMissingSince = 0;
   state.track = [];
@@ -688,6 +870,8 @@ function maybeReloadRoute() {
 function deselect() {
   selectToken++;
   state.selected = null;
+  state.selectedShip = null;
+  state.selectedAirport = null;
   state.route = null;
   state.track = [];
   setFollow(false);
@@ -703,11 +887,8 @@ function setFollow(on) {
   state.follow = on;
   $('#btn-follow')?.classList.toggle('active', on);
   if (on) {
-    const ac = state.selected && state.aircraft.get(state.selected);
-    if (ac) {
-      const [la, lo] = currentPosition(ac);
-      map.easeTo({ center: [lo, la], duration: 600 });
-    }
+    const t = selectedTarget();
+    if (t) map.easeTo({ center: [t.lo, t.la], duration: 600 });
   }
 }
 
@@ -716,6 +897,8 @@ function updateUrl() {
   const url = new URL(location.href);
   url.searchParams.delete('flight');
   url.searchParams.delete('hex');
+  url.searchParams.delete('ship');
+  if (state.selectedShip) url.searchParams.set('ship', state.selectedShip);
   if (ac) {
     if (ac.c) url.searchParams.set('flight', ac.c);
     else url.searchParams.set('hex', ac.h);
@@ -758,6 +941,8 @@ function updateMapPadding() {
 }
 
 function renderDetails() {
+  if (state.selectedShip) return renderShipDetails();
+  if (state.selectedAirport) return renderAirportDetails();
   const panel = $('#details');
   const ac = state.selected && state.aircraft.get(state.selected);
   if (!ac) {
@@ -860,6 +1045,7 @@ function stat(label, value, sub = '', swatch = '') {
 }
 
 function updateLiveDetails() {
+  if (state.selectedShip) return updateShipLive();
   const ac = state.selected && state.aircraft.get(state.selected);
   const live = $('#d-live');
   if (!ac || !live) return;
@@ -973,12 +1159,309 @@ setInterval(() => {
 }, 15000);
 
 // ---------------------------------------------------------------------------
+// Ships (AIS)
+// ---------------------------------------------------------------------------
+
+function shipPosition(ship, now = Date.now()) {
+  const age = now - ship.ts;
+  if (isStopped(ship) || ship.c === null || !ship.s || age <= 0) return [ship.la, ship.lo];
+  return F.project(ship.la, ship.lo, ship.c, (ship.s * Math.min(age, SHIP_EXTRAPOLATE_MS)) / 3600000);
+}
+
+function shipFeature(ship, now) {
+  const [la, lo] = shipPosition(ship, now);
+  const stopped = isStopped(ship);
+  return {
+    type: 'Feature',
+    geometry: { type: 'Point', coordinates: [lo, la] },
+    properties: {
+      id: ship.id,
+      n: ship.n || ship.id,
+      icon: stopped ? 'ship-stopped' : 'ship',
+      col: shipColor(ship),
+      sz: shipSize(ship) * (stopped ? 0.75 : 1),
+      k: stopped ? 0 : ship.h ?? ship.c ?? 0,
+    },
+  };
+}
+
+function rememberShipPosition(ship) {
+  let trail = state.shipTrails.get(ship.id);
+  if (!trail) state.shipTrails.set(ship.id, (trail = []));
+  const last = trail[trail.length - 1];
+  if (last && (last[2] >= ship.ts || (last[0] === ship.lo && last[1] === ship.la))) return;
+  trail.push([ship.lo, ship.la, ship.ts]);
+  if (trail.length > SHIP_TRAIL_POINTS) trail.splice(0, trail.length - SHIP_TRAIL_POINTS);
+}
+
+function adoptShip(ship) {
+  if (!ship._clock) {
+    ship.ts += state.clockOffset;
+    ship._clock = true;
+  }
+  rememberShipPosition(ship);
+  return ship;
+}
+
+function ingestShips(list) {
+  const next = new Map();
+  for (const ship of list) next.set(ship.id, adoptShip(ship));
+  if (state.selectedShip && !next.has(state.selectedShip) && state.ships.has(state.selectedShip)) {
+    next.set(state.selectedShip, state.ships.get(state.selectedShip));
+  }
+  state.ships = next;
+  const cutoff = Date.now() - 60 * 60 * 1000;
+  for (const [id, trail] of state.shipTrails) if (!next.has(id) && trail[trail.length - 1][2] < cutoff) state.shipTrails.delete(id);
+}
+
+let shipTimer = null;
+let shipController = null;
+
+async function pollShips() {
+  clearTimeout(shipTimer);
+  shipController?.abort();
+  const controller = new AbortController();
+  shipController = controller;
+  try {
+    if (!state.settings.ships) {
+      state.shipNotices = [];
+      ingestShips([]);
+    } else if (map.getZoom() < SHIP_MIN_ZOOM) {
+      state.shipNotices = ['Zoom in to see ships.'];
+      ingestShips([]);
+    } else {
+      const qs = new URLSearchParams(Object.entries(viewBox()).map(([k, v]) => [k, v.toFixed(3)]));
+      const data = await api(`/api/ships?${qs}`, { signal: controller.signal });
+      state.shipSources = data.sources || [];
+      state.shipNotices = data.notices || [];
+      ingestShips(data.ships || []);
+      if (state.selectedShip && !(data.ships || []).some((x) => x.id === state.selectedShip)) {
+        const d = await api(`/api/ship/${state.selectedShip}`, { signal: controller.signal }).catch(() => null);
+        if (d?.ship) state.ships.set(d.ship.id, adoptShip(d.ship));
+      }
+    }
+    render(true);
+    if (state.selectedShip) renderSelectionOverlays();
+  } catch (err) {
+    if (err.name === 'AbortError') return;
+    state.shipNotices = [`Ships: ${err.message}`];
+  } finally {
+    if (shipController === controller) {
+      shipController = null;
+      state.shipsPolled = true;
+      Splash.step('ships', state.shipNotices.length && !state.ships.size ? 'warn' : 'ok', state.ships.size ? `${F.fmtNumber(state.ships.size)} ships` : state.shipNotices[0] || 'Ready');
+      shipTimer = setTimeout(pollShips, document.hidden ? POLL_HIDDEN_MS : POLL_SHIPS_MS);
+    }
+  }
+}
+
+function shipTrailFeatures(ship) {
+  const trail = [...(state.shipTrails.get(ship.id) || [])];
+  const [la, lo] = shipPosition(ship);
+  trail.push([lo, la, Date.now()]);
+  if (trail.length < 2) return [];
+  return [{ type: 'Feature', geometry: { type: 'LineString', coordinates: trail.map(([x, y]) => [x, y]) }, properties: { color: shipColor(ship) } }];
+}
+
+function selectShip(id, { fly = false, follow = false } = {}) {
+  selectToken++;
+  state.selected = null;
+  state.selectedAirport = null;
+  state.route = null;
+  state.track = [];
+  state.selectedShip = String(id);
+  setFollow(follow);
+  applySelectionFilter();
+  renderShipDetails();
+  render(true);
+  renderSelectionOverlays();
+  updateUrl();
+  const ship = state.ships.get(state.selectedShip);
+  if (fly && ship) {
+    const [la, lo] = shipPosition(ship);
+    map.flyTo({ center: [lo, la], zoom: Math.max(map.getZoom(), 9), speed: 1.4, essential: true });
+  }
+}
+
+function renderShipDetails() {
+  const panel = $('#details');
+  const ship = state.ships.get(state.selectedShip);
+  if (!ship) {
+    panel.hidden = true;
+    updateMapPadding();
+    return;
+  }
+  const category = SHIP_CATEGORIES[shipCategory(ship.t)];
+  const badges = [`<span class="badge"><span class="swatch-dot" style="background:${category.color}"></span>${F.escapeHtml(category.label)}</span>`];
+  if (ship.ns === 14) badges.push('<span class="badge danger">AIS-SART emergency beacon</span>');
+  else if (NAV_STATUS[ship.ns]) badges.push(`<span class="badge">${F.escapeHtml(NAV_STATUS[ship.ns])}</span>`);
+  const size = ship.l ? `${ship.l} × ${ship.w ?? '?'} m` : '—';
+  panel.innerHTML = `
+    <div class="d-head">
+      <div class="d-head-top">
+        <div>
+          <div class="d-callsign">${F.escapeHtml(ship.n || `MMSI ${ship.id}`)}</div>
+          <div class="d-airline">${F.escapeHtml(shipTypeName(ship.t))} · MMSI ${ship.id}</div>
+        </div>
+        <div class="d-actions">
+          <button class="icon-btn ${state.follow ? 'active' : ''}" id="btn-follow" title="Follow (F)" aria-label="Follow this ship">${ICON_SVG.follow}</button>
+          <button class="icon-btn" id="btn-close" title="Close (Esc)" aria-label="Close">${ICON_SVG.close}</button>
+        </div>
+      </div>
+      <div class="badges">${badges.join('')}</div>
+    </div>
+    <div class="d-scroll">
+      <div class="d-route">
+        ${ship.d
+          ? `<div class="voyage"><div class="voyage-label">Destination</div><div class="voyage-dest">${F.escapeHtml(ship.d)}</div>
+             ${ship.eta ? `<div class="voyage-eta">ETA ${F.escapeHtml(ship.eta)} UTC <span>(reported by the crew)</span></div>` : ''}</div>`
+          : '<div class="route-unknown">No destination reported.</div>'}
+      </div>
+      <div class="d-section">
+        <h4>Live data</h4>
+        <div class="stat-grid" id="d-live"></div>
+      </div>
+      <div class="d-section">
+        <h4>Vessel</h4>
+        <dl class="kv">
+          <dt>Type</dt><dd>${F.escapeHtml(shipTypeName(ship.t))}${ship.t ? ` <span class="mono">(${ship.t})</span>` : ''}</dd>
+          <dt>MMSI</dt><dd class="mono">${ship.id}</dd>
+          <dt>IMO</dt><dd class="mono">${ship.imo || '—'}</dd>
+          <dt>Call sign</dt><dd class="mono">${F.escapeHtml(ship.cs || '—')}</dd>
+          <dt>Length × beam</dt><dd>${size}</dd>
+          <dt>Draught</dt><dd>${ship.dr ? `${ship.dr} m` : '—'}</dd>
+        </dl>
+      </div>
+      <div class="d-foot" id="d-foot"></div>
+    </div>`;
+  panel.hidden = false;
+  $('#btn-close').onclick = deselect;
+  $('#btn-follow').onclick = () => setFollow(!state.follow);
+  updateShipLive();
+  updateMapPadding();
+}
+
+function updateShipLive() {
+  const ship = state.ships.get(state.selectedShip);
+  const live = $('#d-live');
+  if (!ship || !live) return;
+  const [la, lo] = shipPosition(ship);
+  live.innerHTML = [
+    stat('Speed', ship.s === null ? '—' : `${ship.s.toFixed(1)} kn`, ship.s === null ? '' : `${F.fmtNumber(ship.s * 1.852)} km/h`),
+    stat('Course', F.fmtHeading(ship.c)),
+    stat('Heading', F.fmtHeading(ship.h)),
+    stat('Status', F.escapeHtml(NAV_STATUS[ship.ns] || '—')),
+    `<div class="stat" style="grid-column: span 2"><div class="label">Position</div><div class="value" style="font-size:14px;font-family:var(--mono)">${F.fmtCoord(la, lo)}</div></div>`,
+  ].join('');
+  const foot = $('#d-foot');
+  if (foot) {
+    const age = Date.now() - ship.ts;
+    foot.innerHTML = `Position reported ${F.fmtAge(age)}${age > 120000 && !isStopped(ship) ? ' (shown position is estimated)' : ''} · Source: ${F.escapeHtml(ship.src)}`;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Airports (bundled list from the offline map package)
+// ---------------------------------------------------------------------------
+
+let airportIndex = new Map();
+
+async function loadAirports() {
+  try {
+    const res = await fetch(assetUrl('map/airports.json'));
+    if (!res.ok) throw new Error(res.status);
+    state.airports = await res.json();
+    airportIndex = new Map(state.airports.map((a) => [a.icao, a]));
+  } catch {
+    state.builtinAvailable = false; // offline map package not built (website without `npm run basemap`)
+    document.querySelector('[data-style="builtin"]')?.remove();
+    if (state.settings.style === 'builtin') setMapStyle('dark');
+  }
+}
+
+const airportByIcao = (icao) => (icao ? airportIndex.get(icao) : null);
+
+function selectAirport(icao, { fly = false } = {}) {
+  const airport = airportByIcao(icao);
+  if (!airport) return;
+  selectToken++;
+  state.selected = null;
+  state.selectedShip = null;
+  state.selectedAirport = icao;
+  setFollow(false);
+  applySelectionFilter();
+  render(true);
+  renderSelectionOverlays();
+  renderAirportDetails();
+  if (fly) map.flyTo({ center: [airport.lon, airport.lat], zoom: Math.max(map.getZoom(), 9.5), essential: true });
+}
+
+/** Aircraft within 40 nm of the airport, low and slow first (most likely arriving / departing). */
+function aircraftNearAirport(airport) {
+  const near = [];
+  for (const ac of state.aircraft.values()) {
+    const [la, lo] = currentPosition(ac);
+    const d = F.distanceNm(airport.lat, airport.lon, la, lo);
+    if (d <= 40 && (ac.g || (ac.a ?? 99999) < 15000)) near.push([d, ac]);
+  }
+  return near.sort((a, b) => a[0] - b[0]).slice(0, 12);
+}
+
+function renderAirportDetails() {
+  const panel = $('#details');
+  const a = airportByIcao(state.selectedAirport);
+  if (!a) {
+    panel.hidden = true;
+    updateMapPadding();
+    return;
+  }
+  const near = aircraftNearAirport(a);
+  panel.innerHTML = `
+    <div class="d-head">
+      <div class="d-head-top">
+        <div>
+          <div class="d-callsign">${F.escapeHtml(a.iata || a.icao)}${a.iata ? `<span class="d-flightno">${F.escapeHtml(a.icao)}</span>` : ''}</div>
+          <div class="d-airline">${F.escapeHtml(a.name)}</div>
+        </div>
+        <div class="d-actions"><button class="icon-btn" id="btn-close" title="Close (Esc)" aria-label="Close">${ICON_SVG.close}</button></div>
+      </div>
+      <div class="badges"><span class="badge">${a.large ? 'Major airport' : 'Regional airport'}</span></div>
+    </div>
+    <div class="d-scroll">
+      <div class="d-section">
+        <dl class="kv">
+          <dt>City</dt><dd>${F.escapeHtml(a.city || '—')}</dd>
+          <dt>Country</dt><dd>${F.escapeHtml(a.country || '—')}</dd>
+          <dt>Elevation</dt><dd>${a.elev === null ? '—' : F.fmtAltitude(a.elev, false)}</dd>
+          <dt>Position</dt><dd class="mono">${F.fmtCoord(a.lat, a.lon)}</dd>
+          <dt>Local time</dt><dd>${Extras.solarTimeText(a.lon)}</dd>
+          <dt>Sun</dt><dd>${Extras.isDaylight(a.lat, a.lon) ? '☀︎ Daylight' : '☾ Night'}</dd>
+        </dl>
+      </div>
+      <div class="d-section">
+        <h4>Arriving &amp; departing nearby (${near.length})</h4>
+        ${near.length ? `<div class="near-list">${near.map(([d, ac]) => `
+          <button class="near-item" data-hex="${ac.h}">
+            <img src="${iconDataUrl(ac._icon, F.altitudeColor(ac.a, ac.g))}" alt="">
+            <span class="near-name">${F.escapeHtml(ac.c || ac.r || ac.h.toUpperCase())}${ac._fn ? ` <small>${ac._fn}</small>` : ''}</span>
+            <span class="near-meta">${F.fmtAltitude(ac.a, ac.g)} · ${F.fmtDistance(d)}</span>
+          </button>`).join('')}</div>` : '<div class="profile-empty">No aircraft close to the airport right now (zoom in near it to load live traffic).</div>'}
+      </div>
+      ${a.wiki ? `<div class="d-foot"><a href="${F.escapeHtml(a.wiki)}" target="_blank" rel="noopener">Wikipedia ↗</a> · Data: OurAirports</div>` : '<div class="d-foot">Data: OurAirports</div>'}
+    </div>`;
+  panel.hidden = false;
+  $('#btn-close').onclick = deselect;
+  panel.querySelectorAll('.near-item').forEach((b) => b.addEventListener('click', () => selectAircraft(b.dataset.hex, { fly: true })));
+  updateMapPadding();
+}
+
+// ---------------------------------------------------------------------------
 // Map interaction: click to select, hover tooltip
 // ---------------------------------------------------------------------------
 
-function aircraftAt(point, radius = 8) {
-  if (!map.getLayer('aircraft-icons')) return null;
-  const layers = ['aircraft-icons'];
+/** Nearest rendered feature of the given layers around a screen point; returns one of its properties. */
+function featureAt(point, radius, layers, key) {
+  if (!layers.every((l) => map.getLayer(l))) return null;
   const features = map.queryRenderedFeatures([[point.x - radius, point.y - radius], [point.x + radius, point.y + radius]], { layers });
   if (!features.length) return null;
   let best = features[0];
@@ -991,8 +1474,16 @@ function aircraftAt(point, radius = 8) {
       best = f;
     }
   }
-  return best.properties.h;
+  return best.properties[key];
 }
+
+const aircraftAt = (point, radius = 8) => featureAt(point, radius, ['aircraft-icons'], 'h');
+const shipAt = (point, radius = 8) => (state.settings.ships ? featureAt(point, radius, ['ship-icons'], 'id') : null);
+const airportAt = (point, radius = 8) => {
+  if (!state.settings.airports) return null;
+  const layers = ['airport-dots-large', 'airport-dots-small'].filter((l) => map.getLayer(l));
+  return layers.length ? featureAt(point, radius, layers, 'icao') : null;
+};
 
 selectedEl.addEventListener('click', (e) => {
   e.stopPropagation();
@@ -1000,9 +1491,14 @@ selectedEl.addEventListener('click', (e) => {
 });
 
 map.on('click', (e) => {
-  const hex = aircraftAt(e.point, matchMedia('(pointer: coarse)').matches ? 16 : 8);
+  const radius = matchMedia('(pointer: coarse)').matches ? 16 : 8;
+  const hex = aircraftAt(e.point, radius);
+  const shipId = !hex && shipAt(e.point, radius);
+  const icao = !hex && !shipId && airportAt(e.point, radius);
   if (hex) selectAircraft(hex);
-  else if (state.selected) deselect();
+  else if (shipId) selectShip(shipId);
+  else if (icao) selectAirport(icao);
+  else if (state.selected || state.selectedShip || state.selectedAirport) deselect();
   closePopovers();
 });
 
@@ -1010,7 +1506,21 @@ const tooltip = $('#tooltip');
 map.on('mousemove', (e) => {
   const hex = aircraftAt(e.point, 6);
   const ac = hex && state.aircraft.get(hex);
-  map.getCanvas().style.cursor = ac ? 'pointer' : '';
+  const ship = !ac && state.ships.get(shipAt(e.point, 6));
+  const airport = !ac && !ship && airportByIcao(airportAt(e.point, 6));
+  map.getCanvas().style.cursor = ac || ship || airport ? 'pointer' : '';
+  if (ship || airport) {
+    tooltip.innerHTML = ship
+      ? `<div class="tt-title">${F.escapeHtml(ship.n || `MMSI ${ship.id}`)}</div>
+        <div class="tt-sub">${F.escapeHtml(shipTypeName(ship.t))}${ship.d ? ` → ${F.escapeHtml(ship.d)}` : ''}</div>
+        <div class="tt-sub">${ship.s === null ? '—' : `${ship.s.toFixed(1)} kn`} · ${F.escapeHtml(NAV_STATUS[ship.ns] || '')}</div>`
+      : `<div class="tt-title">${F.escapeHtml(airport.iata || airport.icao)} · ${F.escapeHtml(airport.name)}</div>
+        <div class="tt-sub">${F.escapeHtml([airport.city, airport.country].filter(Boolean).join(', '))}</div>`;
+    tooltip.style.left = `${e.originalEvent.clientX}px`;
+    tooltip.style.top = `${e.originalEvent.clientY}px`;
+    tooltip.hidden = false;
+    return;
+  }
   if (!ac) {
     tooltip.hidden = true;
     return;
@@ -1087,6 +1597,57 @@ function localMatches(query) {
   return scored.sort((a, b) => b[0] - a[0]).slice(0, 8).map(([, ac]) => ac);
 }
 
+function localShipMatches(query) {
+  const q = query.trim().toUpperCase();
+  if (q.length < 3) return [];
+  const out = [];
+  for (const ship of state.ships.values()) {
+    if (ship.id === q || String(ship.imo) === q || ship.cs.toUpperCase() === q || ship.n.toUpperCase().includes(q)) out.push(ship);
+    if (out.length >= 5) break;
+  }
+  return out;
+}
+
+function localAirportMatches(query) {
+  const q = query.trim().toUpperCase();
+  if (q.length < 3) return [];
+  const exact = [];
+  const partial = [];
+  for (const a of state.airports) {
+    if (a.iata === q || a.icao === q) exact.push(a);
+    else if (q.length >= 4 && (a.name.toUpperCase().includes(q) || a.city.toUpperCase().startsWith(q))) partial.push(a);
+    if (exact.length + partial.length >= 40) break;
+  }
+  return [...exact, ...partial.sort((x, y) => y.large - x.large)].slice(0, 4);
+}
+
+function shipResultRow(ship) {
+  const icon = iconDataUrl(isStopped(ship) ? 'ship-stopped' : 'ship', shipColor(ship));
+  const sub = [shipTypeName(ship.t), ship.d ? `→ ${ship.d}` : '', `MMSI ${ship.id}`].filter(Boolean).join(' · ');
+  return `<span class="sr-icon"><img src="${icon}" alt="" style="transform:none"></span>
+    <span class="sr-main"><span class="sr-title">${F.escapeHtml(ship.n || `MMSI ${ship.id}`)}</span><span class="sr-sub">${F.escapeHtml(sub)}</span></span>
+    <span class="sr-meta">${ship.s === null ? '' : `${ship.s.toFixed(1)} kn`}</span>`;
+}
+
+function airportResultRow(a) {
+  return `<span class="sr-icon sr-airport">${a.iata || a.icao}</span>
+    <span class="sr-main"><span class="sr-title">${F.escapeHtml(a.name)}</span><span class="sr-sub">${F.escapeHtml([a.city, a.country].filter(Boolean).join(', '))} · ${a.icao}</span></span>
+    <span class="sr-meta">Airport</span>`;
+}
+
+function pickShip(ship) {
+  hideResults();
+  searchInput.blur();
+  state.ships.set(ship.id, adoptShip(ship));
+  selectShip(ship.id, { fly: true, follow: true });
+}
+
+function pickAirport(a) {
+  hideResults();
+  searchInput.blur();
+  selectAirport(a.icao, { fly: true });
+}
+
 function pickResult(ac) {
   hideResults();
   searchInput.blur();
@@ -1101,11 +1662,24 @@ function suggest() {
     return;
   }
   const matches = localMatches(q);
-  const rows = matches.map((ac) => `<button class="sr-item" role="option">${resultRow(ac)}</button>`);
-  const items = matches.map((ac) => ({ action: () => pickResult(ac) }));
-  rows.push(`<button class="sr-item sr-global" role="option"><span class="sr-icon">${GLOBE_SVG}</span><span class="sr-main"><span class="sr-title">Search worldwide for “${F.escapeHtml(q)}”</span><span class="sr-sub">Flight number, callsign, registration or ICAO hex</span></span><span class="sr-meta">Enter ↵</span></button>`);
+  const ships = localShipMatches(q);
+  const airports = localAirportMatches(q);
+  let html = '';
+  const items = [];
+  const section = (title, list, row, pick) => {
+    if (!list.length) return;
+    html += `<div class="sr-section">${title}</div>`;
+    for (const x of list) {
+      html += `<button class="sr-item" role="option">${row(x)}</button>`;
+      items.push({ action: () => pick(x) });
+    }
+  };
+  section('Flights on the map', matches, resultRow, pickResult);
+  section('Ships on the map', ships, shipResultRow, pickShip);
+  section('Airports', airports, airportResultRow, pickAirport);
+  html += `<button class="sr-item sr-global" role="option"><span class="sr-icon">${GLOBE_SVG}</span><span class="sr-main"><span class="sr-title">Search worldwide for “${F.escapeHtml(q)}”</span><span class="sr-sub">Flight number, callsign, registration, ship name, MMSI or IMO</span></span><span class="sr-meta">Enter ↵</span></button>`;
   items.push({ action: () => globalSearch(q) });
-  showResults((matches.length ? '<div class="sr-section">On the map</div>' : '') + rows.join(''), items);
+  showResults(html, items);
 }
 
 async function globalSearch(query) {
@@ -1117,16 +1691,33 @@ async function globalSearch(query) {
     const data = await api(`/api/search?q=${encodeURIComponent(q)}`);
     if (token !== searchToken) return;
     const list = (data.aircraft || []).map((ac) => enrich(ac));
-    if (!list.length) {
-      showResults(`<div class="sr-empty"><b>No live flight found for “${F.escapeHtml(q)}”.</b><br>It may not have departed yet, may have landed, or may be outside receiver coverage. Try the callsign (e.g. <b>BAW117</b>), registration (e.g. <b>G-XLEA</b>) or ICAO hex.</div>`, []);
+    const ships = data.ships || [];
+    const airports = localAirportMatches(q);
+    const total = list.length + ships.length + airports.length;
+    if (!total) {
+      showResults(`<div class="sr-empty"><b>Nothing live found for “${F.escapeHtml(q)}”.</b><br>A flight may not have departed yet or may be outside receiver coverage; a ship may be out of AIS range. Try a callsign (e.g. <b>BAW117</b>), registration (<b>G-XLEA</b>), ship name, MMSI or an airport code (<b>LHR</b>).</div>`, []);
       return;
     }
-    if (list.length === 1) {
-      pickResult(list[0]);
+    if (total === 1) {
+      if (list.length) pickResult(list[0]);
+      else if (ships.length) pickShip(ships[0]);
+      else pickAirport(airports[0]);
       return;
     }
-    const rows = list.map((ac) => `<button class="sr-item" role="option">${resultRow(ac)}</button>`);
-    showResults(`<div class="sr-section">${list.length} live flights</div>${rows.join('')}`, list.map((ac) => ({ action: () => pickResult(ac) })));
+    let html = '';
+    const items = [];
+    const section = (title, items_, row, pick) => {
+      if (!items_.length) return;
+      html += `<div class="sr-section">${title}</div>`;
+      for (const x of items_) {
+        html += `<button class="sr-item" role="option">${row(x)}</button>`;
+        items.push({ action: () => pick(x) });
+      }
+    };
+    section(`${list.length} live flight${list.length === 1 ? '' : 's'}`, list, resultRow, pickResult);
+    section(`${ships.length} ship${ships.length === 1 ? '' : 's'}`, ships, shipResultRow, pickShip);
+    section('Airports', airports, airportResultRow, pickAirport);
+    showResults(html, items);
   } catch (err) {
     if (token !== searchToken) return;
     showResults(`<div class="sr-empty">Search failed: ${F.escapeHtml(err.message)}</div>`, []);
@@ -1197,11 +1788,54 @@ styleGrid.innerHTML = Object.entries(STYLES).map(([id, s]) =>
 styleGrid.addEventListener('click', (e) => {
   const id = e.target.closest('[data-style]')?.dataset.style;
   if (!id || id === state.settings.style) return;
-  state.settings.style = id;
-  saveSettings();
-  styleGrid.querySelectorAll('.style-btn').forEach((b) => b.classList.toggle('active', b.dataset.style === id));
-  map.setStyle(STYLES[id].url || satelliteStyle(), { diff: false });
+  setMapStyle(id);
 });
+
+// Overlay switches: ships, airports, day/night, weather radar.
+function bindSwitch(id, key, apply) {
+  const el = $(id);
+  el.checked = state.settings[key];
+  el.addEventListener('change', () => {
+    state.settings[key] = el.checked;
+    saveSettings();
+    apply(el.checked);
+  });
+}
+bindSwitch('#opt-ships', 'ships', (on) => {
+  if (map.getLayer('ship-icons')) map.setLayoutProperty('ship-icons', 'visibility', on ? 'visible' : 'none');
+  if (map.getLayer('ship-labels')) map.setLayoutProperty('ship-labels', 'visibility', on && state.settings.labels ? 'visible' : 'none');
+  if (!on && state.selectedShip) deselect();
+  pollShips();
+});
+bindSwitch('#opt-airports', 'airports', (on) => Extras.setBaseAirports(map, on));
+bindSwitch('#opt-daynight', 'daynight', (on) => Extras.setDayNight(map, on));
+bindSwitch('#opt-weather', 'weather', (on) => Extras.setWeather(map, on).catch((err) => toast(`Weather radar unavailable: ${err.message}`, true)));
+$('#ship-legend').innerHTML = Object.values(SHIP_CATEGORIES).map((c) => `<span><i style="background:${c.color}"></i>${c.label}</span>`).join('');
+
+// Live statistics panel
+document.querySelector('[data-panel="stats"]').addEventListener('click', () => renderStats());
+setInterval(() => {
+  if (!$('#panel-stats').hidden) renderStats();
+}, 3000);
+
+function renderStats() {
+  Extras.renderStats($('#stats-body'), {
+    aircraft: [...state.aircraft.values()].filter(passesFilters),
+    ships: state.settings.ships ? [...state.ships.values()] : [],
+    onAircraft: (hex) => selectAircraft(hex, { fly: true }),
+    onAirline: (prefix) => {
+      state.filters.prefix = prefix;
+      filtersChanged();
+      toast(`Showing only ${prefix} flights – clear it in Filters.`);
+    },
+    onShip: (id) => selectShip(id, { fly: true }),
+    fmtAltitude: F.fmtAltitude,
+    fmtSpeed: F.fmtSpeed,
+    altitudeColor: F.altitudeColor,
+    shipCategory,
+    categories: SHIP_CATEGORIES,
+  });
+}
 
 const optGlobe = $('#opt-globe');
 const optLabels = $('#opt-labels');
@@ -1218,6 +1852,7 @@ optLabels.addEventListener('change', () => {
   state.settings.labels = optLabels.checked;
   saveSettings();
   if (map.getLayer('aircraft-labels')) map.setLayoutProperty('aircraft-labels', 'visibility', optLabels.checked ? 'visible' : 'none');
+  if (map.getLayer('ship-labels')) map.setLayoutProperty('ship-labels', 'visibility', optLabels.checked && state.settings.ships ? 'visible' : 'none');
 });
 optTrails.addEventListener('change', () => {
   state.settings.trails = optTrails.checked;
@@ -1308,7 +1943,8 @@ async function loadDataStatus() {
       World snapshot (OpenSky): <b>${F.fmtNumber(o.aircraft)}</b> aircraft${o.snapshotAgeSec !== null ? `, ${o.snapshotAgeSec}s old` : ''}<br>
       OpenSky access: <b>${o.authenticated ? 'account' : 'anonymous'}</b>, refresh every ${o.refreshEverySec}s${o.creditsRemaining !== null ? `, ${F.fmtNumber(o.creditsRemaining)} credits left` : ''}
       ${o.blockedForSec ? `<br><span style="color:var(--accent)">Rate-limited, retrying in ${Math.ceil(o.blockedForSec / 60)} min</span>` : ''}
-      ${o.lastError ? `<br>Last error: ${F.escapeHtml(o.lastError)}` : ''}`;
+      ${o.lastError ? `<br>Last error: ${F.escapeHtml(o.lastError)}` : ''}
+      ${s.ships ? `<br>Ships: <b>${F.fmtNumber(s.ships.ships)}</b> tracked · aisstream.io: <b>${F.escapeHtml(typeof s.ships.aisstream === 'string' ? s.ships.aisstream : s.ships.aisstream.status)}</b> · Digitraffic: <b>${s.ships.digitraffic?.error ? 'unavailable' : 'ok'}</b>` : ''}`;
   } catch (err) {
     el.textContent = `Status unavailable: ${err.message}`;
   }
@@ -1354,9 +1990,9 @@ document.addEventListener('keydown', (e) => {
     searchInput.select();
   } else if (e.key === 'Escape' && !typing) {
     if (document.querySelector('.popover:not([hidden])')) closePopovers();
-    else if (state.selected) deselect();
+    else if (state.selected || state.selectedShip || state.selectedAirport) deselect();
   } else if (!typing && !e.metaKey && !e.ctrlKey && !e.altKey) {
-    if (e.key === 'f' && state.selected) setFollow(!state.follow);
+    if (e.key === 'f' && (state.selected || state.selectedShip)) setFollow(!state.follow);
     if (e.key === 'w') showWorld();
   }
 });
@@ -1378,8 +2014,9 @@ function updateStatus() {
   const stale = age > 45000 || state.lastError;
   dot.className = `live-dot ${stale ? 'err' : state.notices.length ? 'warn' : 'ok'}`;
   const src = state.mode === 'demo' ? 'Demo data' : state.sources.join(' + ');
-  text.innerHTML = `<b>${F.fmtNumber(state.visibleCount)}</b> aircraft · ${F.escapeHtml(src)} · ${F.fmtAge(age)}`;
-  text.parentElement.title = state.notices.join('\n') || (state.lastError ? `Last update failed: ${state.lastError}` : 'Live');
+  const ships = state.settings.ships && state.shipVisibleCount ? ` · <b>${F.fmtNumber(state.shipVisibleCount)}</b> ships` : '';
+  text.innerHTML = `<b>${F.fmtNumber(state.visibleCount)}</b> aircraft${ships} · ${F.escapeHtml(src)} · ${F.fmtAge(age)}`;
+  text.parentElement.title = [...state.notices, ...state.shipNotices].join('\n') || (state.lastError ? `Last update failed: ${state.lastError}` : 'Live');
 }
 
 function renderLegend() {
@@ -1421,7 +2058,7 @@ if (NATIVE && window.NativeApp) {
   document.querySelector('[data-panel="settings"]').addEventListener('click', () => {
     $('#btn-privacy').hidden = !window.NativeApp.isPrivacyOptionsRequired();
   });
-  window.flightTracker.onPreviousCrash = () => toast('Flight Tracker closed unexpectedly last time.', true, {
+  window.flightTracker.onPreviousCrash = () => toast('AirSea Radar closed unexpectedly last time.', true, {
     label: 'Send report',
     run: () => window.NativeApp.shareDiagnostics(),
   });
@@ -1435,8 +2072,13 @@ async function openDeepLink() {
   const params = new URLSearchParams(location.search);
   const hex = params.get('hex');
   const flight = params.get('flight');
+  const shipId = params.get('ship');
   try {
-    if (hex) {
+    if (shipId) {
+      const d = await api(`/api/ship/${encodeURIComponent(shipId)}`);
+      if (d.ship) return pickShip(d.ship);
+      toast(`Ship ${shipId} is not being tracked right now.`, true);
+    } else if (hex) {
       const d = await api(`/api/aircraft/${encodeURIComponent(hex)}`);
       if (d.aircraft) return pickResult(enrich(d.aircraft));
       toast(`Aircraft ${hex.toUpperCase()} is not being tracked right now.`, true);
@@ -1454,7 +2096,52 @@ async function openDeepLink() {
   }
 }
 
-map.once('load', () => {
+// ---------------------------------------------------------------------------
+// Loading screen: shown until the map and the first live data are in (or a timeout).
+// ---------------------------------------------------------------------------
+
+const Splash = {
+  el: $('#splash'),
+  steps: { map: 'pending', flights: 'pending', ships: 'pending' },
+  started: Date.now(),
+  step(name, status, text) {
+    if (!this.el || !this.steps[name] || this.steps[name] === status) return;
+    this.steps[name] = status;
+    const row = this.el.querySelector(`[data-step="${name}"]`);
+    if (row) {
+      row.dataset.status = status;
+      if (text) row.querySelector('.splash-note').textContent = text;
+    }
+    const done = Object.values(this.steps).filter((v) => v !== 'pending').length;
+    this.el.querySelector('.splash-bar i').style.width = `${15 + (done / 3) * 85}%`;
+    if (this.steps.map !== 'pending' && this.steps.flights !== 'pending' && (this.steps.ships !== 'pending' || Date.now() - this.started > 6000)) this.hide();
+  },
+  hide() {
+    if (!this.el || this.el.classList.contains('done')) return;
+    // Keep it up for a moment so it doesn't flash.
+    const wait = Math.max(0, 900 - (Date.now() - this.started));
+    setTimeout(() => {
+      this.el.classList.add('done');
+      document.body.classList.remove('loading');
+      setTimeout(() => this.el.remove(), 600);
+    }, wait);
+  },
+};
+if (!navigator.onLine) Splash.el?.querySelector('.splash-offline')?.removeAttribute('hidden');
+setTimeout(() => Splash.hide(), 15000); // never trap the user behind the loading screen
+window.addEventListener('offline', () => toast('You are offline – the built-in map still works; live traffic resumes when you reconnect.', true));
+window.addEventListener('online', () => {
+  toast('Back online – refreshing live traffic.');
   poll();
-  openDeepLink();
+  pollShips();
 });
+
+// Start as soon as the map style is ready (the 'load' event also waits for every visible tile).
+map.once('style.load', () => {
+  Splash.step('map', 'ok', state.settings.style === 'builtin' ? 'Built-in offline map' : 'Ready');
+  poll();
+  pollShips();
+  openDeepLink();
+  Extras.startClockedOverlays(map, state.settings);
+});
+loadAirports();

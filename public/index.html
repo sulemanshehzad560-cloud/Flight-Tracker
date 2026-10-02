@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>Flight Tracker — Live Air Traffic</title>
-  <meta name="description" content="Live map of every tracked flight in the world. Search any flight number, callsign or registration.">
+  <title>AirSea Radar — Live Flight &amp; Ship Tracker</title>
+  <meta name="description" content="AirSea Radar: live flight tracker and ship tracker on one radar map. Search any flight number, callsign, registration, ship name, MMSI or airport.">
   <meta name="theme-color" content="#0b1020">
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -14,20 +14,39 @@
   <link rel="stylesheet" href="css/style.css">
   <script src="https://unpkg.com/maplibre-gl@5.6.0/dist/maplibre-gl.js"></script>
 </head>
-<body>
-  <div id="map" aria-label="Live flight map"></div>
+<body class="loading">
+  <!-- Loading screen: until the map and the first live data are in -->
+  <div id="splash" class="splash" role="status" aria-live="polite">
+    <div class="splash-card">
+      <div class="splash-logo">
+        <span class="splash-radar"><i></i></span>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 16v-2l-8-5V3.5a1.5 1.5 0 0 0-3 0V9l-8 5v2l8-2.5V19l-2 1.5V22l3.5-1 3.5 1v-1.5L13 19v-5.5z"/></svg>
+      </div>
+      <h1>AirSea <b>Radar</b></h1>
+      <p class="splash-tag">Live flights &amp; ships worldwide</p>
+      <div class="splash-bar"><i></i></div>
+      <ul class="splash-steps">
+        <li data-step="map" data-status="pending"><span class="splash-dot"></span>Map<span class="splash-note">Loading…</span></li>
+        <li data-step="flights" data-status="pending"><span class="splash-dot"></span>Live flights<span class="splash-note">Connecting…</span></li>
+        <li data-step="ships" data-status="pending"><span class="splash-dot"></span>Ships (AIS)<span class="splash-note">Connecting…</span></li>
+      </ul>
+      <p class="splash-offline" hidden>You're offline. The built-in map works without a connection; live traffic appears once you're back online.</p>
+    </div>
+  </div>
+
+  <div id="map" aria-label="Live flight and ship map"></div>
 
   <!-- Top bar: brand + search -->
   <header class="topbar">
-    <a class="brand" href="./" title="Flight Tracker">
+    <a class="brand" href="./" title="AirSea Radar">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 16v-2l-8-5V3.5a1.5 1.5 0 0 0-3 0V9l-8 5v2l8-2.5V19l-2 1.5V22l3.5-1 3.5 1v-1.5L13 19v-5.5z"/></svg>
-      <span>Flight<b>Tracker</b></span>
+      <span>AirSea <b>Radar</b></span>
     </a>
     <div class="search" role="combobox" aria-expanded="false" aria-haspopup="listbox" aria-owns="search-results">
       <svg class="search-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M10 2a8 8 0 0 1 6.32 12.9l5.39 5.4-1.42 1.4-5.39-5.38A8 8 0 1 1 10 2zm0 2a6 6 0 1 0 0 12 6 6 0 0 0 0-12z"/></svg>
       <input id="search-input" type="search" autocomplete="off" spellcheck="false"
-             placeholder="Search flight (BA117, PK785), callsign, registration…"
-             aria-label="Search flights" aria-autocomplete="list" aria-controls="search-results">
+             placeholder="Search flights (BA117), ships, airports (LHR)…"
+             aria-label="Search flights, ships and airports" aria-autocomplete="list" aria-controls="search-results">
       <kbd class="search-kbd" aria-hidden="true">/</kbd>
       <div id="search-results" class="search-results" role="listbox" hidden></div>
     </div>
@@ -41,6 +60,9 @@
     <button class="tool" data-panel="filters" title="Filters" aria-label="Filters">
       <svg viewBox="0 0 24 24"><path d="M3 5h18v2l-7 7v6l-4-2v-4L3 7z"/></svg>
       <span class="tool-dot" id="filter-dot" hidden></span>
+    </button>
+    <button class="tool" data-panel="stats" title="Live statistics" aria-label="Live statistics">
+      <svg viewBox="0 0 24 24"><path d="M4 20V10h3v10zm6.5 0V4h3v16zM17 20v-7h3v7z"/></svg>
     </button>
     <button class="tool" data-panel="settings" title="Settings" aria-label="Settings">
       <svg viewBox="0 0 24 24"><path d="M19.4 13a7.6 7.6 0 0 0 0-2l2.1-1.6-2-3.5-2.5 1a7.4 7.4 0 0 0-1.7-1L15 3h-4l-.4 2.9a7.4 7.4 0 0 0-1.7 1l-2.5-1-2 3.5L6.6 11a7.6 7.6 0 0 0 0 2l-2.1 1.6 2 3.5 2.5-1a7.4 7.4 0 0 0 1.7 1L11 21h4l.4-2.9a7.4 7.4 0 0 0 1.7-1l2.5 1 2-3.5zM13 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7z" transform="translate(-1 0)"/></svg>
@@ -65,6 +87,17 @@
     <label class="switch"><input type="checkbox" id="opt-globe"><span>3D globe</span></label>
     <label class="switch"><input type="checkbox" id="opt-labels" checked><span>Flight labels</span></label>
     <label class="switch"><input type="checkbox" id="opt-trails"><span>Trails for all aircraft</span></label>
+    <h3>Overlays</h3>
+    <label class="switch"><input type="checkbox" id="opt-ships"><span>Ships (AIS)</span></label>
+    <div class="ship-legend" id="ship-legend"></div>
+    <label class="switch"><input type="checkbox" id="opt-airports"><span>Airports (built-in map)</span></label>
+    <label class="switch"><input type="checkbox" id="opt-daynight"><span>Day &amp; night</span></label>
+    <label class="switch"><input type="checkbox" id="opt-weather"><span>Weather radar</span></label>
+  </section>
+
+  <section class="popover popover-wide" id="panel-stats" hidden aria-label="Live statistics">
+    <h3>Live statistics <small>for the visible map</small></h3>
+    <div id="stats-body"></div>
   </section>
 
   <section class="popover" id="panel-filters" hidden aria-label="Filters">

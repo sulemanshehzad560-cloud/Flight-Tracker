@@ -13,7 +13,9 @@ import zlib from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 import { OpenSkyGlobal } from './lib/providers.js';
 import { createApi } from './lib/api.js';
-import { DemoTraffic } from './lib/demo.js';
+import { TilePack } from './lib/tilepack.js';
+import { DemoTraffic, DemoShips } from './lib/demo.js';
+import { ShipTracker, webSocketAisStream } from './lib/ships.js';
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), 'public');
 const PORT = Number(process.env.PORT) || 8080;
@@ -26,12 +28,19 @@ const opensky = new OpenSkyGlobal({
   ttlSec: Number(process.env.OPENSKY_REFRESH_SEC) || undefined,
 });
 const demo = DEMO ? new DemoTraffic(Number(process.env.DEMO_AIRCRAFT) || 4000) : null;
-const routeApi = createApi({ opensky, demo, statusExtra: () => ({ uptimeSec: Math.round(process.uptime()) }) });
+// Ships: aisstream.io worldwide when AISSTREAM_API_KEY is set (Node 22+), Digitraffic (Baltic) always.
+const AISSTREAM_API_KEY = process.env.AISSTREAM_API_KEY;
+if (AISSTREAM_API_KEY && typeof WebSocket === 'undefined') console.warn('aisstream.io needs Node.js 22 or newer (WebSocket); worldwide ships disabled.');
+const ships = demo
+  ? new DemoShips(Number(process.env.DEMO_SHIPS) || 2500)
+  : new ShipTracker({ openStream: AISSTREAM_API_KEY && typeof WebSocket !== 'undefined' ? webSocketAisStream(AISSTREAM_API_KEY) : null });
+const tilePack = new TilePack(path.join(ROOT, 'map'));
+const routeApi = createApi({ opensky, demo, ships, statusExtra: () => ({ uptimeSec: Math.round(process.uptime()) }) });
 
 const MIME = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
   '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon',
-  '.webmanifest': 'application/manifest+json',
+  '.webmanifest': 'application/manifest+json', '.pbf': 'application/x-protobuf',
 };
 
 // ---------------------------------------------------------------------------
@@ -75,6 +84,12 @@ const server = http.createServer(async (req, res) => {
   if (req.method !== 'GET' && req.method !== 'HEAD') {
     return send(req, res, 405, Buffer.from('Method not allowed'), 'text/plain');
   }
+  const tile = /^\/map\/tiles\/(\d+)\/(\d+)\/(\d+)\.pbf$/.exec(url.pathname);
+  if (tile) {
+    const data = tilePack.get(+tile[1], +tile[2], +tile[3]);
+    if (!data) return send(req, res, 404, Buffer.from('Offline map not built (npm run basemap)'), 'text/plain');
+    return send(req, res, 200, data, 'application/x-protobuf', { 'Cache-Control': 'public, max-age=86400' });
+  }
   if (url.pathname.startsWith('/api/')) {
     try {
       const [status, payload] = await routeApi(url);
@@ -89,5 +104,5 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, HOST, () => {
   const mode = demo ? 'DEMO (simulated traffic)' : opensky.authenticated ? 'live, OpenSky account' : 'live, OpenSky anonymous';
-  console.log(`✈  Flight Tracker running at http://localhost:${PORT}  [${mode}]`);
+  console.log(`✈  AirSea Radar running at http://localhost:${PORT}  [${mode}]`);
 });

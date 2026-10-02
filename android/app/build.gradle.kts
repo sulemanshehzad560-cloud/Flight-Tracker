@@ -12,18 +12,24 @@ val admobTestBannerId = "ca-app-pub-3940256099942544/9214589741"
 // Upload-key signing comes from the environment (GitHub Actions secrets); never commit the keystore.
 val keystoreFile: String? = System.getenv("ANDROID_KEYSTORE_FILE")
 
+// Worldwide ships: aisstream.io API key (GitHub secret AISSTREAM_API_KEY). Without it the app shows
+// ships from the keyless Digitraffic feed (Baltic Sea) only.
+val aisstreamKey: String = System.getenv("AISSTREAM_API_KEY") ?: ""
+
 android {
     namespace = "com.flighttracker.app"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.flighttracker.app"
+        // Store identity – can never change once the app is published on Google Play.
+        applicationId = "com.airsearadar.app"
         minSdk = 23
         targetSdk = 36
         versionCode = (System.getenv("VERSION_CODE") ?: "1").toInt()
         versionName = System.getenv("VERSION_NAME") ?: "1.0.0"
         manifestPlaceholders["admobAppId"] = admobAppId
         buildConfigField("String", "BANNER_AD_UNIT_ID", "\"$admobBannerId\"")
+        buildConfigField("String", "AISSTREAM_API_KEY", "\"$aisstreamKey\"")
     }
 
     signingConfigs {
@@ -58,6 +64,12 @@ android {
         buildConfig = true
     }
 
+    // Store every bundled asset uncompressed: the offline map pack is read with random access (openFd),
+    // and the WebView loads uncompressed files faster.
+    androidResources {
+        noCompress += listOf("bin", "idx", "pbf", "json", "js", "css", "html", "svg", "png")
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -69,6 +81,7 @@ android {
 dependencies {
     implementation("com.google.android.gms:play-services-ads:24.4.0")
     implementation("com.google.android.ump:user-messaging-platform:3.2.0")
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
 }
 
 // Bundle the web app (../public, ../lib) and MapLibre into the APK/AAB assets.

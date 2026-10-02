@@ -28,7 +28,7 @@ import java.util.Locale;
  *   the next time they open the app after a crash.
  */
 public final class Diagnostics {
-    private static final String TAG = "FlightTracker";
+    private static final String TAG = "AirSeaRadar";
     private static final long MAX_LOG_BYTES = 256 * 1024;
     private static final int MAX_REPORT_CHARS = 60_000;
 
@@ -117,7 +117,7 @@ public final class Diagnostics {
     /** Device + app information and the most recent log lines. */
     public static synchronized String buildReport(Context context) {
         StringBuilder r = new StringBuilder();
-        r.append("Flight Tracker diagnostics report\n")
+        r.append("AirSea Radar diagnostics report\n")
             .append("App: ").append(BuildConfig.VERSION_NAME).append(" (").append(BuildConfig.VERSION_CODE).append(")\n")
             .append("Device: ").append(Build.MANUFACTURER).append(' ').append(Build.MODEL).append('\n')
             .append("Android: ").append(Build.VERSION.RELEASE).append(" (API ").append(Build.VERSION.SDK_INT).append(")\n");
@@ -146,7 +146,7 @@ public final class Diagnostics {
     public static void share(Activity activity) {
         Intent send = new Intent(Intent.ACTION_SEND);
         send.setType("text/plain");
-        send.putExtra(Intent.EXTRA_SUBJECT, "Flight Tracker diagnostics " + BuildConfig.VERSION_NAME);
+        send.putExtra(Intent.EXTRA_SUBJECT, "AirSea Radar diagnostics " + BuildConfig.VERSION_NAME);
         send.putExtra(Intent.EXTRA_TEXT, buildReport(activity));
         activity.startActivity(Intent.createChooser(send, "Send diagnostics report"));
     }

@@ -6,6 +6,11 @@ OUT="$1"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MAPLIBRE_VERSION="5.6.0"
 
+# The offline base map (public/map) is generated, not committed: build it once if it's missing.
+if [ ! -f "$ROOT/public/map/manifest.json" ]; then
+  (cd "$ROOT" && npm ci --no-audit --no-fund && npm run basemap)
+fi
+
 rm -rf "$OUT"
 mkdir -p "$OUT/www/vendor"
 cp -r "$ROOT/public" "$OUT/www/public"

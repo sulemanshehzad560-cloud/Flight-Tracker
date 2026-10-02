@@ -314,3 +314,73 @@ kbd { display: inline-block; min-width: 22px; text-align: center; padding: 1px 6
 }
 .tool svg.stroke-icon { fill: none; stroke: var(--text-2); stroke-width: 1.8; }
 .tool:hover svg.stroke-icon { fill: none; stroke: var(--text); }
+
+/* ---------------------------------------------------------------- loading screen */
+.splash {
+  position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; padding: 24px;
+  background: radial-gradient(ellipse at 50% 40%, #13213d 0%, var(--bg) 70%);
+  transition: opacity .5s ease, visibility .5s;
+}
+.splash.done { opacity: 0; visibility: hidden; }
+body.loading .topbar, body.loading .tools, body.loading .statusbar, body.loading .maplibregl-control-container { visibility: hidden; }
+.splash-card { width: min(340px, 100%); text-align: center; }
+.splash-logo { position: relative; width: 104px; height: 104px; margin: 0 auto 18px; display: grid; place-items: center; }
+.splash-logo svg { position: relative; width: 40px; height: 40px; fill: var(--accent); transform: rotate(45deg); filter: drop-shadow(0 0 12px rgba(255, 194, 26, .45)); }
+.splash-radar { position: absolute; inset: 0; border-radius: 50%; border: 1px solid rgba(255, 194, 26, .25); background: repeating-radial-gradient(circle, transparent 0 17px, rgba(255, 194, 26, .08) 17px 18px); overflow: hidden; }
+.splash-radar i { position: absolute; inset: 0; background: conic-gradient(from 0deg, rgba(255, 194, 26, .45), transparent 70deg); animation: sweep 2.2s linear infinite; }
+@keyframes sweep { to { transform: rotate(360deg); } }
+.splash h1 { margin: 0; font-size: 28px; font-weight: 600; letter-spacing: -0.02em; }
+.splash h1 b { color: var(--accent); font-weight: 700; }
+.splash-tag { margin: 4px 0 22px; color: var(--text-2); }
+.splash-bar { height: 4px; border-radius: 4px; background: rgba(255, 255, 255, .08); overflow: hidden; }
+.splash-bar i { display: block; height: 100%; width: 15%; border-radius: 4px; background: linear-gradient(90deg, var(--accent), #ff8a1f); transition: width .4s ease; }
+.splash-steps { list-style: none; padding: 0; margin: 18px 0 0; display: grid; gap: 8px; text-align: left; font-size: 13px; }
+.splash-steps li { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-radius: 10px; background: rgba(255, 255, 255, .04); }
+.splash-note { margin-left: auto; color: var(--text-3); font-size: 12px; }
+.splash-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-3); flex-shrink: 0; }
+.splash-steps [data-status="pending"] .splash-dot { animation: blink 1s ease-in-out infinite; background: var(--accent); }
+.splash-steps [data-status="ok"] .splash-dot { background: var(--good); }
+.splash-steps [data-status="warn"] .splash-dot { background: #ff8a1f; }
+@keyframes blink { 50% { opacity: .25; } }
+.splash-offline { margin-top: 16px; color: #ffd666; font-size: 12px; }
+
+/* ---------------------------------------------------------------- ships, airports, stats */
+.ship-legend { display: flex; flex-wrap: wrap; gap: 4px 10px; margin: -2px 0 6px; font-size: 11px; color: var(--text-2); }
+.ship-legend span { display: inline-flex; align-items: center; gap: 5px; }
+.ship-legend i, .swatch-dot { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 5px; vertical-align: 0; }
+.voyage-label { color: var(--text-3); font-size: 11px; text-transform: uppercase; letter-spacing: .07em; font-weight: 600; }
+.voyage-dest { font-size: 22px; font-weight: 700; letter-spacing: -0.01em; margin-top: 2px; }
+.voyage-eta { margin-top: 6px; color: var(--text); font-weight: 600; font-size: 13px; }
+.voyage-eta span { color: var(--text-3); font-weight: 400; }
+.sr-airport { font: 700 10px var(--mono); color: var(--accent); }
+.near-list { display: grid; gap: 4px; }
+.near-item { display: flex; align-items: center; gap: 10px; padding: 7px 8px; border: 0; border-radius: 9px; background: var(--panel-2); cursor: pointer; text-align: left; }
+.near-item:hover { background: rgba(255, 255, 255, .09); }
+.near-item img { width: 20px; height: 20px; transform: rotate(45deg); }
+.near-name { flex: 1; font-weight: 600; }
+.near-name small { color: var(--text-2); font-weight: 500; }
+.near-meta { color: var(--text-2); font: 12px var(--mono); }
+
+.popover-wide { width: 340px; }
+.popover h3 small { text-transform: none; letter-spacing: 0; font-weight: 400; color: var(--text-3); }
+.st-tiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-top: 4px; }
+.st-tiles div { padding: 10px; border-radius: 10px; background: var(--panel-2); display: flex; flex-direction: column; }
+.st-tiles b { font-size: 20px; font-variant-numeric: tabular-nums; }
+.st-tiles span { color: var(--text-3); font-size: 11px; }
+.st-bars { display: grid; gap: 2px; }
+.st-row { display: grid; grid-template-columns: 112px 1fr auto; align-items: center; gap: 8px; padding: 5px 6px; border: 0; border-radius: 8px; background: none; text-align: left; font-size: 12px; color: var(--text); }
+button.st-row { cursor: pointer; }
+button.st-row:hover { background: rgba(255, 255, 255, .06); }
+.st-label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text-2); }
+.st-label i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 6px; }
+.st-track { height: 8px; border-radius: 4px; background: rgba(255, 255, 255, .06); overflow: hidden; }
+.st-fill { display: block; height: 100%; border-radius: 4px; background: var(--accent); }
+.st-value { font: 12px var(--mono); color: var(--text); min-width: 52px; text-align: right; }
+.st-value small { color: var(--text-3); margin-left: 4px; }
+.st-records { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.st-record { display: flex; flex-direction: column; gap: 2px; padding: 9px; border: 1px solid var(--border); border-radius: 10px; background: var(--panel-2); cursor: pointer; text-align: left; min-width: 0; }
+.st-record:hover { border-color: rgba(255, 194, 26, .5); }
+.st-record b { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.st-record span { font-size: 11px; color: var(--text-2); }
+.st-record .st-record-title { color: var(--text-3); text-transform: uppercase; letter-spacing: .06em; font-size: 10px; }
+@media (max-width: 720px) { .popover-wide { width: auto; } }

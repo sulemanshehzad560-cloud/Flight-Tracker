@@ -1,7 +1,7 @@
 {
-  "name": "flight-tracker",
+  "name": "airsea-radar",
   "version": "1.0.0",
-  "description": "Live, interactive map of every tracked flight in the world — search by flight number, callsign or registration.",
+  "description": "AirSea Radar \u2013 live flight tracker and ship tracker on one interactive radar map, with a built-in offline world map.",
   "type": "module",
   "main": "server.js",
   "scripts": {
@@ -9,10 +9,20 @@
     "demo": "DEMO=1 node server.js",
     "dev": "node --watch server.js",
     "test": "node --test",
-    "android": "cd android && ./gradlew bundleRelease assembleDebug"
+    "android": "cd android && ./gradlew bundleRelease assembleDebug",
+    "basemap": "node scripts/build-basemap.mjs"
   },
   "engines": {
     "node": ">=18.17"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "devDependencies": {
+    "smp-noto-glyphs": "2.0.0",
+    "topojson-client": "3.1.0",
+    "world-atlas": "2.0.2",
+    "airports-json": "1.0.0",
+    "all-the-cities": "3.1.0",
+    "geojson-vt": "4.0.2",
+    "vt-pbf": "3.1.3"
+  }
 }

@@ -70,6 +70,13 @@ const SHAPES = {
     ctx.fill();
     ctx.fillRect(29, 43, 6, 6);
   },
+  // Ships: a hull pointing north (bow up) while under way; a diamond when stopped / moored.
+  ship(ctx) {
+    polygon(ctx, mirrored([[32, 6], [36, 14], [39, 24], [39, 52], [37.5, 57], [32.6, 58]]));
+  },
+  'ship-stopped'(ctx) {
+    polygon(ctx, [[32, 20], [43, 32], [32, 44], [21, 32]]);
+  },
   ground(ctx) {
     ctx.beginPath();
     ctx.roundRect(25, 18, 14, 28, 4);
