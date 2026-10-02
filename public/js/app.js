@@ -30,8 +30,9 @@ const MAX_EXTRAPOLATE_MS = 10 * 60 * 1000; // dead-reckon positions at most this
 const SIGNAL_LOST_MS = 2 * 60 * 1000;
 const HISTORY_POINTS = 400;
 const WORLD_ZOOM = 2.6; // below this zoom the whole world is requested
-const SHIP_MIN_ZOOM = 3.5; // ships are only fetched when zoomed in at least this far
-const POLL_SHIPS_MS = 15000;
+const SHIP_MIN_ZOOM = 3; // ships are only fetched when zoomed in at least this far
+// In the app the ship feed runs on the phone (cheap to read often); the website asks the server.
+const POLL_SHIPS_MS = isNativeApp() ? 4000 : 15000;
 const SHIP_EXTRAPOLATE_MS = 30 * 60 * 1000;
 const SHIP_TRAIL_POINTS = 300;
 
@@ -1246,6 +1247,7 @@ async function pollShips() {
     if (err.name === 'AbortError') return;
     state.shipNotices = [`Ships: ${err.message}`];
   } finally {
+    updateShipHint();
     if (shipController === controller) {
       shipController = null;
       state.shipsPolled = true;
@@ -1253,6 +1255,20 @@ async function pollShips() {
       shipTimer = setTimeout(pollShips, document.hidden ? POLL_HIDDEN_MS : POLL_SHIPS_MS);
     }
   }
+}
+
+/** Small chip on the map explaining why no ships are visible (zoom level, feed connecting, errors). */
+function updateShipHint() {
+  const el = $('#ship-hint');
+  if (!el) return;
+  let text = '';
+  if (state.settings.ships && !state.ships.size) {
+    if (map.getZoom() < SHIP_MIN_ZOOM) text = 'Zoom in to see ships';
+    else if (state.shipNotices.length) text = state.shipNotices[0].replace(/\.$/, '');
+    else text = 'No ships reported here yet';
+  }
+  el.hidden = !text;
+  el.querySelector('span').textContent = text;
 }
 
 function shipTrailFeatures(ship) {
@@ -1810,6 +1826,11 @@ bindSwitch('#opt-ships', 'ships', (on) => {
 bindSwitch('#opt-airports', 'airports', (on) => Extras.setBaseAirports(map, on));
 bindSwitch('#opt-daynight', 'daynight', (on) => Extras.setDayNight(map, on));
 bindSwitch('#opt-weather', 'weather', (on) => Extras.setWeather(map, on).catch((err) => toast(`Weather radar unavailable: ${err.message}`, true)));
+$('#ship-hint').addEventListener('click', () => {
+  if (map.getZoom() < SHIP_MIN_ZOOM) map.easeTo({ zoom: SHIP_MIN_ZOOM + 1.5 });
+  else pollShips();
+});
+map.on('zoomend', updateShipHint);
 $('#ship-legend').innerHTML = Object.values(SHIP_CATEGORIES).map((c) => `<span><i style="background:${c.color}"></i>${c.label}</span>`).join('');
 
 // Live statistics panel

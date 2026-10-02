@@ -384,3 +384,12 @@ button.st-row:hover { background: rgba(255, 255, 255, .06); }
 .st-record span { font-size: 11px; color: var(--text-2); }
 .st-record .st-record-title { color: var(--text-3); text-transform: uppercase; letter-spacing: .06em; font-size: 10px; }
 @media (max-width: 720px) { .popover-wide { width: auto; } }
+
+/* ---------------------------------------------------------------- ship hint chip */
+.ship-hint {
+  position: fixed; left: 50%; top: 70px; transform: translateX(-50%); z-index: 12; max-width: min(90vw, 420px);
+  padding: 6px 12px; border-radius: 20px; border: 1px solid var(--border); background: var(--panel); backdrop-filter: blur(16px);
+  box-shadow: var(--shadow); color: var(--text-2); font-size: 12px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.ship-hint:hover { color: var(--text); }
+body.loading .ship-hint { visibility: hidden; }

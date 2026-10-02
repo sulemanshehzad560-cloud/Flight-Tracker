@@ -38,6 +38,8 @@ final class AisStreamClient extends WebSocketListener {
     private String boxes;
     private boolean running;
     private long retryMs = 2000;
+    private long received;
+    private int flushes;
 
     AisStreamClient(String apiKey, WebView web) {
         this.apiKey = apiKey;
@@ -101,6 +103,7 @@ final class AisStreamClient extends WebSocketListener {
 
     @Override
     public void onOpen(WebSocket ws, Response response) {
+        Diagnostics.log("I", "AIS", "Connected to aisstream.io");
         retryMs = 2000;
         ws.send(subscription()); // must arrive within 3 seconds
         status("open");
@@ -117,6 +120,10 @@ final class AisStreamClient extends WebSocketListener {
     }
 
     private void enqueue(String message) {
+        received++;
+        if (message.startsWith("{\"error\"")) {
+            Diagnostics.log("E", "AIS", "aisstream.io: " + message);
+        }
         if (queued.get() >= MAX_QUEUE) return; // the page is behind: drop rather than run out of memory
         queue.add(message);
         queued.incrementAndGet();
@@ -130,6 +137,7 @@ final class AisStreamClient extends WebSocketListener {
 
     @Override
     public void onClosed(WebSocket ws, int code, String reason) {
+        Diagnostics.log("W", "AIS", "Closed by server: " + code + " " + reason);
         scheduleReconnect(ws);
     }
 
@@ -164,6 +172,7 @@ final class AisStreamClient extends WebSocketListener {
                 batch.append(']');
                 web.evaluateJavascript("window.__aisBatch && window.__aisBatch(" + JSONObject.quote(batch.toString()) + ")", null);
             }
+            if (++flushes % 60 == 0) Diagnostics.log("I", "AIS", received + " messages received so far");
             if (running) main.postDelayed(this, 1000);
         }
     };
