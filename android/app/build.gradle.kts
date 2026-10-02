@@ -21,8 +21,9 @@ android {
     compileSdk = 36
 
     defaultConfig {
-        // Store identity – can never change once the app is published on Google Play.
-        applicationId = "com.airsearadar.app"
+        // Store identity – must match the package name of the app entry in Google Play Console exactly,
+        // and can never change once the app is published there.
+        applicationId = "com.airsearadar.appcom.airsearadar.app"
         minSdk = 23
         targetSdk = 36
         versionCode = (System.getenv("VERSION_CODE") ?: "1").toInt()

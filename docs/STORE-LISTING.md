@@ -10,7 +10,7 @@ in the fields the stores weight most: the title, then the subtitle or short desc
 | App Store subtitle | 30 | `Live Flight & Ship Tracker` |
 | Play short description | 80 | `Live flight tracker & ship tracker: planes, vessels and airports on one radar map` |
 | App Store keywords | 100 | `plane,finder,airplane,aircraft,marine,traffic,vessel,boat,AIS,ADS-B,airport,status,map,cruise,ferry` |
-| Package name | – | `com.airsearadar.app` (cannot change after the first upload) |
+| Package name | – | `com.airsearadar.appcom.airsearadar.app` (cannot change after the first upload) |
 
 ## Full description (Play, up to 4000 characters)
 
