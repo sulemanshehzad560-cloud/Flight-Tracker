@@ -41,6 +41,24 @@ jobs:
       - name: Build the offline base map
         run: npm run basemap
 
+      - name: Check secrets (names only, never values)
+        env:
+          S1: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          S2: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          S3: ${{ secrets.ANDROID_KEY_ALIAS }}
+          S4: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          S5: ${{ secrets.AISSTREAM_API_KEY }}
+        run: |
+          report() { if [ -n "$2" ]; then echo "✅ $1 is set (${#2} characters)"; else echo "::warning::❌ $1 is missing"; fi; }
+          {
+            echo "### Secrets"
+            report ANDROID_KEYSTORE_BASE64 "$S1"
+            report ANDROID_KEYSTORE_PASSWORD "$S2"
+            report ANDROID_KEY_ALIAS "$S3"
+            report ANDROID_KEY_PASSWORD "$S4"
+            report AISSTREAM_API_KEY "$S5"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
       - name: Restore upload key
         env:
           KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
