@@ -59,6 +59,12 @@ jobs:
             report AISSTREAM_API_KEY "$S5"
           } | tee -a "$GITHUB_STEP_SUMMARY"
 
+      - name: Live check of the ship feed (aisstream.io)
+        continue-on-error: true
+        env:
+          AISSTREAM_API_KEY: ${{ secrets.AISSTREAM_API_KEY }}
+        run: node scripts/check-aisstream.mjs | tee -a "$GITHUB_STEP_SUMMARY"
+
       - name: Restore upload key
         env:
           KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
