@@ -4,7 +4,9 @@
 const RAINVIEWER_API = 'https://api.rainviewer.com/public/weather-maps.json';
 const RAD = Math.PI / 180;
 
-let weatherTiles = null; // current RainViewer tile URL template
+// Weather overlay: 'radar' (rain / snow), 'clouds' (infrared satellite) or 'off'.
+let weatherTiles = null; // current RainViewer tile URL template for the selected mode
+let weatherTime = null; // time of the frame shown
 let overlaySettings = null;
 
 // ---------------------------------------------------------------------------
@@ -65,18 +67,21 @@ export function addOverlays(map, settings) {
     layout: { visibility: settings.daynight ? 'visible' : 'none' },
     paint: { 'fill-color': '#000000', 'fill-opacity': 0.42, 'fill-antialias': false },
   });
-  if (weatherTiles) addWeatherLayer(map);
+  if (weatherTiles && settings.weatherMode !== 'off') addWeatherLayer(map);
   setBaseAirports(map, settings.airports);
 }
 
 function addWeatherLayer(map) {
   if (map.getLayer('weather')) map.removeLayer('weather');
   if (map.getSource('weather')) map.removeSource('weather');
-  map.addSource('weather', { type: 'raster', tiles: [weatherTiles], tileSize: 256, maxzoom: 7, attribution: 'Weather radar © RainViewer' });
+  const clouds = overlaySettings?.weatherMode === 'clouds';
+  map.addSource('weather', {
+    type: 'raster', tiles: [weatherTiles], tileSize: 256, maxzoom: 7,
+    attribution: clouds ? 'Satellite © RainViewer' : 'Weather radar © RainViewer',
+  });
   map.addLayer({
     id: 'weather', type: 'raster', source: 'weather',
-    layout: { visibility: overlaySettings?.weather ? 'visible' : 'none' },
-    paint: { 'raster-opacity': 0.65, 'raster-fade-duration': 0 },
+    paint: { 'raster-opacity': overlaySettings?.weatherOpacity ?? 0.65, 'raster-fade-duration': 0 },
   }, map.getLayer('daynight') ? 'daynight' : undefined);
 }
 
@@ -85,23 +90,41 @@ export function setDayNight(map, on) {
   if (on) map.getSource('daynight')?.setData(nightPolygon());
 }
 
-async function refreshWeatherTiles() {
+/** Latest RainViewer frame for a mode; returns the tile URL template and the frame time. */
+async function latestFrame(mode) {
   const res = await fetch(RAINVIEWER_API);
   if (!res.ok) throw new Error(`RainViewer answered ${res.status}`);
   const data = await res.json();
-  const frames = data.radar?.past || [];
+  const frames = (mode === 'clouds' ? data.satellite?.infrared : data.radar?.past) || [];
   const latest = frames[frames.length - 1];
-  if (!latest) throw new Error('no radar frames');
-  weatherTiles = `${data.host}${latest.path}/256/{z}/{x}/{y}/2/1_1.png`;
+  if (!latest) throw new Error(mode === 'clouds' ? 'no satellite images available right now' : 'no radar images available right now');
+  // Radar: colour scheme 2, smoothed, with snow. Clouds: the infrared satellite scheme.
+  const suffix = mode === 'clouds' ? '0/0_0.png' : '2/1_1.png';
+  return { tiles: `${data.host}${latest.path}/256/{z}/{x}/{y}/${suffix}`, time: new Date(latest.time * 1000) };
 }
 
-export async function setWeather(map, on) {
-  if (on) {
-    await refreshWeatherTiles();
-    addWeatherLayer(map);
+/** Switch the weather overlay: mode 'radar' | 'clouds' | 'off'. Resolves to the frame time (or null). */
+export async function setWeather(map, mode) {
+  if (mode === 'off') {
+    if (map.getLayer('weather')) map.removeLayer('weather');
+    if (map.getSource('weather')) map.removeSource('weather');
+    weatherTiles = null;
+    weatherTime = null;
+    return null;
   }
-  if (map.getLayer('weather')) map.setLayoutProperty('weather', 'visibility', on ? 'visible' : 'none');
+  const frame = await latestFrame(mode);
+  if (overlaySettings?.weatherMode !== mode) return null; // the user switched again meanwhile
+  weatherTiles = frame.tiles;
+  weatherTime = frame.time;
+  addWeatherLayer(map);
+  return weatherTime;
 }
+
+export function setWeatherOpacity(map, opacity) {
+  if (map.getLayer('weather')) map.setPaintProperty('weather', 'raster-opacity', opacity);
+}
+
+export const weatherFrameTime = () => weatherTime;
 
 /** Airport dots and codes of the bundled map. */
 export function setBaseAirports(map, on) {
@@ -110,15 +133,18 @@ export function setBaseAirports(map, on) {
   }
 }
 
-/** Keeps the terminator moving and the radar fresh. */
-export function startClockedOverlays(map, settings) {
+/** Keeps the terminator moving and the weather fresh (new radar frames every ~10 minutes). */
+export function startClockedOverlays(map, settings, onWeather = () => {}) {
   setInterval(() => {
     if (settings.daynight) map.getSource('daynight')?.setData(nightPolygon());
   }, 60 * 1000);
-  setInterval(() => {
-    if (settings.weather) setWeather(map, true).catch(() => {});
-  }, 10 * 60 * 1000);
-  if (settings.weather) setWeather(map, true).catch(() => {});
+  const refresh = () => {
+    if (settings.weatherMode && settings.weatherMode !== 'off') {
+      setWeather(map, settings.weatherMode).then(onWeather, (err) => onWeather(null, err));
+    }
+  };
+  setInterval(refresh, 10 * 60 * 1000);
+  refresh();
 }
 
 /** Small round marker image for city points. */

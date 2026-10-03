@@ -71,11 +71,24 @@ const SHAPES = {
     ctx.fillRect(29, 43, 6, 6);
   },
   // Ships: a hull pointing north (bow up) while under way; a diamond when stopped / moored.
+  // Ship seen from above, bow up: pointed bow, cargo deck with hatch gaps, bridge block at the stern.
   ship(ctx) {
-    polygon(ctx, mirrored([[32, 6], [36, 14], [39, 24], [39, 52], [37.5, 57], [32.6, 58]]));
+    polygon(ctx, mirrored([[32, 2], [36.5, 7], [40, 15], [42, 25], [42, 55], [40.5, 59.5], [32.6, 61]]));
+    ctx.save();
+    ctx.globalCompositeOperation = 'destination-out';
+    for (const y of [19, 27, 35]) ctx.fillRect(25, y, 14, 2.6); // gaps between cargo hatches
+    ctx.fillRect(25, 43, 14, 2.2); // gap in front of the bridge
+    ctx.beginPath(); // bow (forecastle) line
+    ctx.moveTo(26.5, 13);
+    ctx.lineTo(32, 9);
+    ctx.lineTo(37.5, 13);
+    ctx.lineWidth = 2.2;
+    ctx.stroke();
+    ctx.restore();
   },
+  // Kept for older references: stopped ships now use the same ship silhouette (drawn more faintly).
   'ship-stopped'(ctx) {
-    polygon(ctx, [[32, 20], [43, 32], [32, 44], [21, 32]]);
+    SHAPES.ship(ctx);
   },
   ground(ctx) {
     ctx.beginPath();

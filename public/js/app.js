@@ -30,7 +30,7 @@ const MAX_EXTRAPOLATE_MS = 10 * 60 * 1000; // dead-reckon positions at most this
 const SIGNAL_LOST_MS = 2 * 60 * 1000;
 const HISTORY_POINTS = 400;
 const WORLD_ZOOM = 2.6; // below this zoom the whole world is requested
-const SHIP_MIN_ZOOM = 3; // ships are only fetched when zoomed in at least this far
+const SHIP_MIN_ZOOM = 0; // ships are shown at every zoom level (the feed follows the visible area)
 // In the app the ship feed runs on the phone (cheap to read often); the website asks the server.
 const POLL_SHIPS_MS = isNativeApp() ? 4000 : 15000;
 const SHIP_EXTRAPOLATE_MS = 30 * 60 * 1000;
@@ -156,7 +156,8 @@ const state = {
   // The Android app opens on the bundled offline map; the website on the detailed online map.
   settings: {
     style: NATIVE ? 'builtin' : 'dark', globe: false, labels: true, trails: false, units: 'aviation', ships: true,
-    airports: true, daynight: false, weather: false, ...store.get('settings', {}),
+    // Weather starts on (rain radar) so it's visible on first launch; the user can switch it off.
+    airports: true, daynight: false, weatherMode: 'radar', weatherOpacity: 0.65, ...store.get('settings', {}),
   },
   lastOk: 0,
   lastError: null,
@@ -268,7 +269,7 @@ function setupLayers() {
     id: 'ship-icons', type: 'symbol', source: 'ships',
     layout: {
       'icon-image': ['concat', 'ac-', ['get', 'icon']],
-      'icon-size': iconSize(0.85),
+      'icon-size': iconSize(1.3),
       'icon-rotate': ['get', 'k'],
       'icon-rotation-alignment': 'map',
       'icon-pitch-alignment': 'map',
@@ -276,7 +277,12 @@ function setupLayers() {
       'icon-ignore-placement': true,
       visibility: state.settings.ships ? 'visible' : 'none',
     },
-    paint: { 'icon-color': ['get', 'col'], 'icon-halo-color': 'rgba(5,8,18,0.8)', 'icon-halo-width': 1 },
+    paint: {
+      'icon-color': ['get', 'col'],
+      'icon-opacity': ['case', ['==', ['get', 'st'], 1], 0.72, 1], // moored / at anchor: a little fainter
+      'icon-halo-color': 'rgba(5,8,18,0.85)',
+      'icon-halo-width': 1.2,
+    },
   });
   map.addLayer({
     id: 'ship-labels', type: 'symbol', source: 'ships', minzoom: 9,
@@ -661,7 +667,7 @@ function selectedTarget() {
   if (ship) {
     const [la, lo] = shipPosition(ship);
     const stopped = isStopped(ship);
-    return { key: `ship:${ship.id}:${stopped}`, icon: stopped ? 'ship-stopped' : 'ship', size: shipSize(ship) * 0.9, label: ship.n || ship.id, la, lo, rot: ship.h ?? ship.c ?? 0 };
+    return { key: `ship:${ship.id}:${stopped}`, icon: 'ship', size: shipSize(ship), label: ship.n || ship.id, la, lo, rot: ship.h ?? ship.c ?? 0 };
   }
   return null;
 }
@@ -1178,10 +1184,11 @@ function shipFeature(ship, now) {
     properties: {
       id: ship.id,
       n: ship.n || ship.id,
-      icon: stopped ? 'ship-stopped' : 'ship',
+      icon: 'ship',
       col: shipColor(ship),
-      sz: shipSize(ship) * (stopped ? 0.75 : 1),
-      k: stopped ? 0 : ship.h ?? ship.c ?? 0,
+      st: stopped ? 1 : 0,
+      sz: shipSize(ship) * (stopped ? 0.85 : 1),
+      k: ship.h ?? ship.c ?? 0,
     },
   };
 }
@@ -1638,7 +1645,7 @@ function localAirportMatches(query) {
 }
 
 function shipResultRow(ship) {
-  const icon = iconDataUrl(isStopped(ship) ? 'ship-stopped' : 'ship', shipColor(ship));
+  const icon = iconDataUrl('ship', shipColor(ship));
   const sub = [shipTypeName(ship.t), ship.d ? `→ ${ship.d}` : '', `MMSI ${ship.id}`].filter(Boolean).join(' · ');
   return `<span class="sr-icon"><img src="${icon}" alt="" style="transform:none"></span>
     <span class="sr-main"><span class="sr-title">${F.escapeHtml(ship.n || `MMSI ${ship.id}`)}</span><span class="sr-sub">${F.escapeHtml(sub)}</span></span>
@@ -1825,7 +1832,57 @@ bindSwitch('#opt-ships', 'ships', (on) => {
 });
 bindSwitch('#opt-airports', 'airports', (on) => Extras.setBaseAirports(map, on));
 bindSwitch('#opt-daynight', 'daynight', (on) => Extras.setDayNight(map, on));
-bindSwitch('#opt-weather', 'weather', (on) => Extras.setWeather(map, on).catch((err) => toast(`Weather radar unavailable: ${err.message}`, true)));
+// Weather: Rain radar / Clouds / Off, opacity, and a one-tap on/off button on the map toolbar.
+let lastWeatherMode = state.settings.weatherMode !== 'off' ? state.settings.weatherMode : 'radar';
+
+function weatherStatus(time, err) {
+  const el = $('#weather-status');
+  if (err) el.textContent = `Weather unavailable: ${err.message}`;
+  else if (time) el.textContent = `${state.settings.weatherMode === 'clouds' ? 'Satellite image' : 'Radar'} from ${time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} · RainViewer`;
+  else el.textContent = state.settings.weatherMode === 'off' ? 'Weather overlay is off.' : 'Loading…';
+}
+
+function syncWeatherUi() {
+  const mode = state.settings.weatherMode;
+  document.querySelectorAll('#weather-modes button').forEach((b) => {
+    b.classList.toggle('active', b.dataset.mode === mode);
+    b.setAttribute('aria-checked', String(b.dataset.mode === mode));
+  });
+  $('#weather-opacity').value = state.settings.weatherOpacity;
+  $('#weather-opacity').disabled = mode === 'off';
+  $('#weather-legend').hidden = mode !== 'radar';
+  $('#btn-weather').classList.toggle('active', mode !== 'off');
+  $('#btn-weather').setAttribute('aria-pressed', String(mode !== 'off'));
+}
+
+function setWeatherMode(mode) {
+  state.settings.weatherMode = mode;
+  if (mode !== 'off') lastWeatherMode = mode;
+  saveSettings();
+  syncWeatherUi();
+  weatherStatus(null);
+  Extras.setWeather(map, mode).then((time) => weatherStatus(time), (err) => {
+    weatherStatus(null, err);
+    toast(`Weather unavailable: ${err.message}`, true);
+  });
+}
+
+$('#weather-modes').addEventListener('click', (e) => {
+  const mode = e.target.closest('[data-mode]')?.dataset.mode;
+  if (mode && mode !== state.settings.weatherMode) setWeatherMode(mode);
+});
+$('#weather-opacity').addEventListener('input', (e) => {
+  state.settings.weatherOpacity = Number(e.target.value);
+  saveSettings();
+  Extras.setWeatherOpacity(map, state.settings.weatherOpacity);
+});
+$('#btn-weather').addEventListener('click', () => {
+  const on = state.settings.weatherMode !== 'off';
+  setWeatherMode(on ? 'off' : lastWeatherMode);
+  toast(on ? 'Weather overlay off.' : `${lastWeatherMode === 'clouds' ? 'Clouds' : 'Rain radar'} on.`);
+});
+syncWeatherUi();
+weatherStatus(null);
 $('#ship-hint').addEventListener('click', () => {
   if (map.getZoom() < SHIP_MIN_ZOOM) map.easeTo({ zoom: SHIP_MIN_ZOOM + 1.5 });
   else pollShips();
@@ -2163,6 +2220,6 @@ map.once('style.load', () => {
   poll();
   pollShips();
   openDeepLink();
-  Extras.startClockedOverlays(map, state.settings);
+  Extras.startClockedOverlays(map, state.settings, (time, err) => weatherStatus(time, err));
 });
 loadAirports();

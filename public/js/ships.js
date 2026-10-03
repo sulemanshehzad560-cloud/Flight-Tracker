@@ -60,5 +60,5 @@ export function shipColor(ship) {
 /** Bigger icon for bigger ships. */
 export function shipSize(ship) {
   const l = ship.l || 0;
-  return l >= 250 ? 1.25 : l >= 150 ? 1.1 : l >= 60 ? 0.95 : l > 0 ? 0.8 : 0.9;
+  return l >= 250 ? 1.35 : l >= 150 ? 1.2 : l >= 60 ? 1.05 : l > 0 ? 0.9 : 1;
 }
