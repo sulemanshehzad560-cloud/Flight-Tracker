@@ -286,6 +286,7 @@ kbd { display: inline-block; min-width: 22px; text-align: center; padding: 1px 6
   .popover { right: 8px; left: 8px; top: 64px; width: auto; max-height: calc(100vh - 140px); }
   .details {
     top: auto; left: 0; right: 0; bottom: 0; width: auto; max-height: 62vh; border-radius: 18px 18px 0 0;
+    z-index: 22; /* above the tool column, which would otherwise cover the sheet's right edge */
     animation: sheet-in .25s ease-out;
   }
   .details::before { content: ''; display: block; width: 40px; height: 4px; border-radius: 4px; background: rgba(255, 255, 255, .2); margin: 8px auto 0; flex-shrink: 0; }
